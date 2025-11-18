@@ -1,0 +1,1945 @@
+//
+//  CryptoHelper.swift
+//  re-Encrypt
+//
+//  Created by xcosw.dev on 17.11.2025.
+//
+
+import Foundation
+import AppKit
+import Security
+import CryptoKit
+import CommonCrypto
+import LocalAuthentication
+import SystemConfiguration
+import CoreData
+import os.log
+//import Darwin
+
+// MARK: - Custom Keychain Manager
+@MainActor
+final class CustomKeychainManager {
+    static let shared = CustomKeychainManager()
+    private var customKeychainRef: SecKeychain?
+    private let keychainLock = NSLock()
+    private(set) var isSetup: Bool = false
+    private var keychainPath: URL {
+        let username = NSUserName()
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let folder = appSupport.appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.secure.app")
+        
+        if !FileManager.default.fileExists(atPath: folder.path) {
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: NSNumber(value: 0o700)])
+                print("✅ Created keychain directory: \(folder.path)")
+            } catch {
+                print("❌ Failed to create directory: \(error)")
+            }
+        }
+        
+        return folder.appendingPathComponent("\(username).keychain")
+    }
+    
+    private init() {
+        // Don't auto-setup on init - wait for master password
+        attemptToOpenExistingKeychain()
+    }
+    
+    private func attemptToOpenExistingKeychain() {
+           keychainLock.lock()
+           defer { keychainLock.unlock() }
+           
+           let path = keychainPath.path
+           
+           // Check if keychain file exists
+           guard FileManager.default.fileExists(atPath: path) else {
+               print("📂 No existing keychain found at: \(path)")
+               return
+           }
+           
+           var keychain: SecKeychain?
+           let status = SecKeychainOpen(path, &keychain)
+           
+           if status == errSecSuccess, let kc = keychain {
+               customKeychainRef = kc
+               isSetup = true
+               print("✅ Opened existing keychain: \(path)")
+               
+               // Try to get status (will fail if locked, but that's ok)
+               var keychainStatus: SecKeychainStatus = 0
+               let statusCheck = SecKeychainGetStatus(kc, &keychainStatus)
+               if statusCheck == errSecSuccess {
+                   print("✅ Keychain is unlocked")
+               } else {
+                   print("🔒 Keychain is locked (will unlock with password)")
+               }
+           } else {
+               print("⚠️ Failed to open existing keychain: \(status)")
+           }
+       }
+    // NEW: Setup keychain with master password
+    func setupKeychain(withPassword password: Data) -> Bool {
+            keychainLock.lock()
+            defer { keychainLock.unlock() }
+            
+            let path = keychainPath.path
+            print("🔑 Setting up keychain at: \(path)")
+            
+            var keychain: SecKeychain?
+            
+            // Check if keychain exists
+            if FileManager.default.fileExists(atPath: path) {
+                print("📂 Keychain exists, attempting to unlock...")
+                
+                // Open existing keychain
+                let openStatus = SecKeychainOpen(path, &keychain)
+                
+                if openStatus == errSecSuccess, let kc = keychain {
+                    customKeychainRef = kc
+                    
+                    // Try to unlock it with the password
+                    let unlocked = unlockKeychain(withPassword: password)
+                    if unlocked {
+                        isSetup = true
+                        return true
+                    } else {
+                        print("⚠️ Failed to unlock keychain")
+                        return false
+                    }
+                } else {
+                    print("⚠️ Failed to open keychain: \(openStatus), will recreate")
+                    try? FileManager.default.removeItem(atPath: path)
+                }
+            }
+            
+            // Create new keychain with master password
+            print("🔨 Creating new keychain with master password...")
+            
+            let status = password.withUnsafeBytes { passwordPtr -> OSStatus in
+                guard let baseAddress = passwordPtr.baseAddress else { return errSecParam }
+                return SecKeychainCreate(path, UInt32(password.count), baseAddress, false, nil, &keychain)
+            }
+            
+            if status == errSecSuccess, let kc = keychain {
+                print("✅ Keychain created successfully")
+                customKeychainRef = kc
+                isSetup = true
+                
+                // Configure keychain settings
+                var settings = SecKeychainSettings(
+                    version: UInt32(SEC_KEYCHAIN_SETTINGS_VERS1),
+                    lockOnSleep: false,
+                    useLockInterval: false,
+                    lockInterval: 0
+                )
+                let settingsStatus = SecKeychainSetSettings(kc, &settings)
+                print(settingsStatus == errSecSuccess ? "✅ Keychain settings configured" : "⚠️ Failed to set keychain settings")
+                
+                return true
+            } else {
+                print("❌ Failed to create keychain: \(status)")
+                isSetup = false
+                return false
+            }
+        }
+    
+    func unlockKeychain(withPassword password: Data) -> Bool {
+            guard let keychain = customKeychainRef else {
+                print("❌ No keychain reference")
+                return false
+            }
+            
+            // Check if already unlocked
+            var keychainStatus: SecKeychainStatus = 0
+            var status = SecKeychainGetStatus(keychain, &keychainStatus)
+            if status == errSecSuccess {
+                print("✅ Keychain already unlocked")
+                return true
+            }
+            
+            // Unlock with provided password
+            print("🔓 Unlocking keychain...")
+            status = password.withUnsafeBytes { passwordPtr -> OSStatus in
+                guard let baseAddress = passwordPtr.baseAddress else { return errSecParam }
+                return SecKeychainUnlock(keychain, UInt32(password.count), baseAddress, true)
+            }
+            
+            if status == errSecSuccess {
+                print("✅ Keychain unlocked successfully")
+                isSetup = true
+                return true
+            } else {
+                print("❌ Failed to unlock keychain: \(status)")
+                return false
+            }
+        }
+        
+    func save(_ data: Data, key: String, encrypted: Data) -> Bool {
+        guard isSetup, let keychain = customKeychainRef else {
+            print("❌ Keychain not setup for save: \(key)")
+            print("   isSetup: \(isSetup)")
+            print("   keychain ref: \(customKeychainRef != nil ? "exists" : "nil")")
+            return false
+        }
+        
+        print("💾 CustomKeychainManager.save()")
+        print("   Key: \(key)")
+        print("   Encrypted data size: \(encrypted.count) bytes")
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: encrypted,
+            kSecUseKeychain as String: keychain,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        
+        // Delete existing
+        print("   Deleting existing item (if any)...")
+        let deleteStatus = SecItemDelete(query as CFDictionary)
+        if deleteStatus == errSecSuccess {
+            print("   ✅ Deleted existing item")
+        } else if deleteStatus == errSecItemNotFound {
+            print("   ℹ️ No existing item to delete")
+        } else {
+            print("   ⚠️ Delete returned: \(deleteStatus)")
+        }
+        
+        // Add new
+        print("   Adding new item...")
+        let status = SecItemAdd(query as CFDictionary, nil)
+        
+        if status == errSecSuccess {
+            print("✅ Saved to custom keychain: \(key)")
+            return true
+        } else {
+            print("❌ Failed to save to keychain: \(key)")
+            print("   Status code: \(status)")
+            print("   Error: \(SecCopyErrorMessageString(status, nil) as String? ?? "Unknown")")
+            
+            // Additional debug
+            var kcStatus: SecKeychainStatus = 0
+            let statusCheck = SecKeychainGetStatus(keychain, &kcStatus)
+            print("   Keychain status check: \(statusCheck)")
+            
+            return false
+        }
+    }
+        
+        func load(key: String) -> Data? {
+            guard isSetup, let keychain = customKeychainRef else {
+                print("❌ Keychain not setup for load: \(key)")
+                return nil
+            }
+            
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: key,
+                kSecUseKeychain as String: keychain,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            
+            if status == errSecSuccess {
+               // print("✅ Loaded from custom keychain: \(key)")
+                return result as? Data
+            } else {
+                print("⚠️ Failed to load from keychain: \(key) - status: \(status)")
+                return nil
+            }
+        }
+        
+        func delete(key: String) {
+            guard let keychain = customKeychainRef else { return }
+            
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: key,
+                kSecUseKeychain as String: keychain
+            ]
+            
+            let status = SecItemDelete(query as CFDictionary)
+            print(status == errSecSuccess ? "✅ Deleted from keychain: \(key)" : "⚠️ Failed to delete: \(key)")
+        }
+        
+        func reset() {
+            keychainLock.lock()
+            defer { keychainLock.unlock() }
+            
+            customKeychainRef = nil
+            isSetup = false
+            let path = keychainPath.path
+            
+            if FileManager.default.fileExists(atPath: path) {
+                try? FileManager.default.removeItem(atPath: path)
+                print("✅ Keychain file deleted")
+            }
+        }
+    
+    func getKeychainInfo() -> String {
+        let path = keychainPath.path
+        let exists = FileManager.default.fileExists(atPath: path)
+        let size = exists ? ((try? FileManager.default.attributesOfItem(atPath: path)[.size]) as? UInt64 ?? 0) : 0
+        
+        return """
+        📋 Keychain Status:
+           Path: \(path)
+           Exists: \(exists)
+           Size: \(size) bytes
+           Reference: \(customKeychainRef != nil ? "Valid" : "Nil")
+           Setup: \(isSetup)
+        """
+    }
+}
+
+// MARK: - Storage Backend
+
+enum StorageBackend: String, Equatable {
+    case keychain
+    case local
+}
+
+// MARK: - Security Error Types
+
+enum SecurityError: Error {
+    case cryptographicFailure
+    case memoryProtectionFailed
+    case invalidInput
+    case deviceCompromised
+    case sessionExpired
+    
+    var localizedDescription: String {
+        switch self {
+        case .cryptographicFailure: return "Cryptographic operation failed"
+        case .memoryProtectionFailed: return "Memory protection failed"
+        case .invalidInput: return "Invalid input provided"
+        case .deviceCompromised: return "Device security compromised"
+        case .sessionExpired: return "Security session expired"
+        }
+    }
+}
+
+// MARK: - Enhanced CryptoHelper
+@MainActor
+struct CryptoHelper {
+    
+    // MARK: - Security Constants
+    
+    private static let AADMasterTokenLabel = "master-token-v2-macos"
+        private static let AADEntryBindingLabel = "entry-binding-v2-macos"
+        private static let pbkdf2Iterations: UInt32 = 600_000
+        private static let backoffBase: TimeInterval = 1.0
+        private static let backoffMax: TimeInterval = 30.0
+        static let maxAttempts = 5
+        
+        static var sessionTimeout: TimeInterval {
+            return SecurityConfigManager.shared.sessionTimeout
+        }
+        
+        private static let tokenKey = "MasterPasswordToken.v2"
+        private static let saltKey = "MasterPasswordSalt.v2"
+        private static let backendDefaultsKey = "CryptoHelper.StorageBackend.v2"
+        private static let failedAttemptsKey = "CryptoHelper.failedAttempts.v2"
+        
+        private static let minPasswordLength = 1
+        private static let maxPasswordLength = 1024
+        private static let minSaltLength = 16
+        private static let maxSaltLength = 64
+        private static let maxEncryptedDataSize = 1_048_576
+        private static let minEncryptedDataSize = 16
+        
+        // MARK: - Key State Management
+        
+        static var keyStorage: SecData?
+        private static var lastActivity: Date = Date()
+        private static let activityLock = NSLock()
+        
+        static var isUnlocked: Bool {
+            activityLock.lock()
+            defer { activityLock.unlock() }
+            return keyStorage != nil && !isSessionExpired()
+        }
+        
+        private static func isSessionExpired() -> Bool {
+            return Date().timeIntervalSince(lastActivity) > sessionTimeout
+        }
+        
+        private static func updateActivity() {
+            activityLock.lock()
+            defer { activityLock.unlock() }
+            lastActivity = Date()
+        }
+        
+        // MARK: - Backend Management
+        
+        static var hasMasterPassword: Bool {
+            switch storageBackend {
+            case .keychain:
+                return CustomKeychainManager.shared.load(key: tokenKey) != nil
+            case .local:
+                return loadFromLocalFile(name: tokenKey) != nil
+            }
+        }
+    
+    static func initializeKeychainBackend() {
+           if storageBackend == .keychain {
+               // CustomKeychainManager will automatically try to open existing keychain in init()
+               print("🔐 Keychain backend initialized")
+               
+               // Check if keychain file exists
+               let manager = CustomKeychainManager.shared
+               let username = NSUserName()
+               let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+               let folder = appSupport.appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.secure.app")
+               let keychainPath = folder.appendingPathComponent("\(username).keychain")
+               
+               if FileManager.default.fileExists(atPath: keychainPath.path) {
+                   print("✅ Found existing keychain file")
+               } else {
+                   print("📂 No keychain file found (will be created on first setup)")
+               }
+           }
+       }
+        
+        static func currentBackend() -> StorageBackend {
+            return storageBackend
+        }
+        
+        static func clearStorage(_ backend: StorageBackend) {
+            deleteRaw(tokenKey, from: backend)
+            deleteRaw(saltKey, from: backend)
+            if backend == .local {
+                try? FileManager.default.removeItem(at: baseDirURL)
+            } else if backend == .keychain {
+                CustomKeychainManager.shared.reset()
+            }
+        }
+        
+        static func clearCurrentStorage() {
+            clearStorage(storageBackend)
+        }
+        
+        static func switchBackend(to newBackend: StorageBackend) {
+            storageBackend = newBackend
+        }
+        
+        private static var storageBackend: StorageBackend {
+            get {
+                guard let raw = UserDefaults.standard.string(forKey: backendDefaultsKey),
+                      let backend = StorageBackend(rawValue: raw) else {
+                    return .keychain
+                }
+                return backend
+            }
+            set {
+                UserDefaults.standard.set(newValue.rawValue, forKey: backendDefaultsKey)
+            }
+        }
+        
+        // MARK: - Master Password Management
+        
+      
+    static func verifyMasterPassword(password: Data, context: NSManagedObjectContext?) -> Bool {
+        // Validate password length
+        guard password.count > 0 && password.count <= 1024 else {
+            incrementFailedAttemptsAndMaybeWipe(context: context)
+            return false
+        }
+        
+        // Validate password format
+        do {
+            try validatePasswordInput(password)
+        } catch {
+            incrementFailedAttemptsAndMaybeWipe(context: context)
+            return false
+        }
+        
+        // Unlock keychain if using keychain backend
+        if storageBackend == .keychain {
+            let unlocked = CustomKeychainManager.shared.unlockKeychain(withPassword: password)
+            if !unlocked {
+                incrementFailedAttemptsAndMaybeWipe(context: context)
+                // Wipe password before returning
+                var mutablePassword = password
+                mutablePassword.withUnsafeMutableBytes { buffer in
+                    if let base = buffer.baseAddress {
+                        _ = memset_s(base, buffer.count, 0, buffer.count)
+                    }
+                }
+                return false
+            }
+        }
+
+        // Load salt
+        let tempKey = SymmetricKey(data: Data(repeating: 0, count: 32))
+        guard let salt = loadRaw(saltKey, from: storageBackend, using: tempKey) else {
+            incrementFailedAttemptsAndMaybeWipe(context: context)
+            var mutablePassword = password
+            mutablePassword.withUnsafeMutableBytes { buffer in
+                if let base = buffer.baseAddress {
+                    _ = memset_s(base, buffer.count, 0, buffer.count)
+                }
+            }
+            return false
+        }
+        
+        // Validate salt
+        do {
+            try validateSaltInput(salt)
+        } catch {
+            incrementFailedAttemptsAndMaybeWipe(context: context)
+            var mutablePassword = password
+            mutablePassword.withUnsafeMutableBytes { buffer in
+                if let base = buffer.baseAddress {
+                    _ = memset_s(base, buffer.count, 0, buffer.count)
+                }
+            }
+            return false
+        }
+        
+        // Derive key from password
+        guard let derivedKey = try? deriveKeySecurely(password: password, salt: salt) else {
+            incrementFailedAttemptsAndMaybeWipe(context: context)
+            var mutablePassword = password
+            mutablePassword.withUnsafeMutableBytes { buffer in
+                if let base = buffer.baseAddress {
+                    _ = memset_s(base, buffer.count, 0, buffer.count)
+                }
+            }
+            return false
+        }
+
+        // Load verification token
+        let aad = tokenAAD()
+        guard let tokenData = loadRaw(tokenKey, from: storageBackend, using: derivedKey) else {
+            incrementFailedAttemptsAndMaybeWipe(context: context)
+            
+            // Clean up derived key
+            var keyData = Data(derivedKey.withUnsafeBytes { Data($0) })
+            keyData.withUnsafeMutableBytes { buffer in
+                if let base = buffer.baseAddress {
+                    _ = memset_s(base, buffer.count, 0, buffer.count)
+                }
+            }
+            
+            // Clean up password
+            var mutablePassword = password
+            mutablePassword.withUnsafeMutableBytes { buffer in
+                if let base = buffer.baseAddress {
+                    _ = memset_s(base, buffer.count, 0, buffer.count)
+                }
+            }
+            
+            return false
+        }
+       
+        // Verify token
+        let isValid = derivedKey.withUnsafeBytes { keyBuffer in
+            let key = SymmetricKey(data: Data(keyBuffer))
+            do {
+                let sealedBox = try AES.GCM.SealedBox(combined: tokenData)
+                let decrypted = try AES.GCM.open(sealedBox, using: key, authenticating: aad)
+                let expected = "verify-v2".data(using: .utf8)!
+                return constantTimeCompare(decrypted, expected)
+            } catch {
+                return false
+            }
+        }
+        
+        // Handle verification result
+        if isValid {
+            setFailedAttempts(0)
+            keyStorage = SecData(Data(derivedKey.withUnsafeBytes { Data($0) }))
+            updateActivity()
+            secureLog("Master password verified successfully")
+        } else {
+            incrementFailedAttemptsAndMaybeWipe(context: context)
+            secureLog("Master password verification failed")
+        }
+        
+        // Clean up derived key
+        var keyData = Data(derivedKey.withUnsafeBytes { Data($0) })
+        keyData.withUnsafeMutableBytes { buffer in
+            if let base = buffer.baseAddress {
+                _ = memset_s(base, buffer.count, 0, buffer.count)
+            }
+        }
+        
+        // Clean up password
+        var mutablePassword = password
+        mutablePassword.withUnsafeMutableBytes { buffer in
+            if let base = buffer.baseAddress {
+                _ = memset_s(base, buffer.count, 0, buffer.count)
+            }
+        }
+        
+        return isValid
+    }
+    
+        
+        private static func constantTimeCompare(_ a: Data, _ b: Data) -> Bool {
+            guard a.count == b.count else { return false }
+            return a.withUnsafeBytes { aBytes in
+                b.withUnsafeBytes { bBytes in
+                    var result = 0
+                    for i in 0..<a.count {
+                        result |= Int(aBytes[i]) ^ Int(bBytes[i])
+                    }
+                    return result == 0
+                }
+            }
+        }
+        
+        static func clearKey() {
+            keyStorage?.clear()
+            keyStorage = nil
+            updateActivity()
+            secureLog("In-memory master key cleared")
+        }
+        
+        static func clearKeys() {
+            keyStorage?.clear()
+            keyStorage = nil
+            updateActivity()
+            secureLog("All in-memory keys cleared")
+        }
+        
+        // MARK: - Key Derivation
+        
+        private static func deriveKey(password: Data, salt: Data) -> SymmetricKey {
+            var derived = [UInt8](repeating: 0, count: 32)
+            
+            let result = password.withUnsafeBytes { passwordBytes in
+                salt.withUnsafeBytes { saltBytes in
+                    CCKeyDerivationPBKDF(
+                        CCPBKDFAlgorithm(kCCPBKDF2),
+                        passwordBytes.bindMemory(to: Int8.self).baseAddress,
+                        passwordBytes.count,
+                        saltBytes.bindMemory(to: UInt8.self).baseAddress,
+                        saltBytes.count,
+                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
+                        pbkdf2Iterations,
+                        &derived,
+                        derived.count
+                    )
+                }
+            }
+            
+            precondition(result == kCCSuccess, "PBKDF2 derivation failed")
+            return SymmetricKey(data: Data(derived))
+        }
+        
+        private static func deriveKeySecurely(password: Data, salt: Data) throws -> SymmetricKey {
+            var derived = [UInt8](repeating: 0, count: 32)
+            
+            let result = password.withUnsafeBytes { passwordBytes in
+                salt.withUnsafeBytes { saltBytes in
+                    CCKeyDerivationPBKDF(
+                        CCPBKDFAlgorithm(kCCPBKDF2),
+                        passwordBytes.bindMemory(to: Int8.self).baseAddress,
+                        passwordBytes.count,
+                        saltBytes.bindMemory(to: UInt8.self).baseAddress,
+                        saltBytes.count,
+                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
+                        pbkdf2Iterations,
+                        &derived,
+                        derived.count
+                    )
+                }
+            }
+            
+            guard result == kCCSuccess else {
+                throw SecurityError.cryptographicFailure
+            }
+            
+            return SymmetricKey(data: Data(derived))
+        }
+        
+        private static func getOrCreateSalt() -> Data {
+            let tempKey = SymmetricKey(data: Data(repeating: 0, count: 32))
+            
+            if let salt = loadRaw(saltKey, from: storageBackend, using: tempKey) {
+                return salt
+            }
+            
+            var salt = Data(count: 32)
+            let result = salt.withUnsafeMutableBytes { buffer in
+                SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
+            }
+            
+            guard result == errSecSuccess else {
+                fatalError("Failed to generate secure random salt")
+            }
+            
+            _ = saveRaw(salt, key: saltKey, to: storageBackend, using: tempKey)
+            return salt
+        }
+        
+        // MARK: - Device Binding
+        
+        static func deviceIdentifier() -> Data {
+            return getDeviceID()
+        }
+        
+        private static func getDeviceID() -> Data {
+            var components = [String]()
+            
+            let platformExpert = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+            defer { IOObjectRelease(platformExpert) }
+            
+            if platformExpert != 0 {
+                if let cfUUID = IORegistryEntryCreateCFProperty(platformExpert, "IOPlatformUUID" as CFString, kCFAllocatorDefault, 0)?.takeUnretainedValue() as? String {
+                    components.append(cfUUID)
+                }
+            }
+            
+            var size = 0
+            sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+            if size > 0 {
+                var cpuModel = [CChar](repeating: 0, count: size)
+                if sysctlbyname("machdep.cpu.brand_string", &cpuModel, &size, nil, 0) == 0,
+                   let model = String(validatingUTF8: cpuModel),
+                   !isVirtualMachineCPU(model) {
+                    components.append(model)
+                }
+            }
+            
+            if let mac = getPrimaryMACAddress(), !isVirtualMachineMAC(mac) {
+                components.append(mac)
+            }
+            
+            if let serial = getHardwareSerialNumber() {
+                components.append(serial)
+            }
+            
+            let username = NSUserName()
+            if !username.isEmpty {
+                components.append(username)
+            }
+            
+            let installTimeKey = "com.app.install-timestamp"
+            if let installTime = UserDefaults.standard.string(forKey: installTimeKey) {
+                components.append(installTime)
+            } else {
+                let timestamp = "\(Date().timeIntervalSince1970)"
+                UserDefaults.standard.set(timestamp, forKey: installTimeKey)
+                components.append(timestamp)
+            }
+            
+            let deviceSaltKey = "com.app.device-salt"
+            let deviceSalt: String
+            if let existing = UserDefaults.standard.string(forKey: deviceSaltKey) {
+                deviceSalt = existing
+            } else {
+                var randomData = Data(count: 32)
+                let result = randomData.withUnsafeMutableBytes {
+                    SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!)
+                }
+                guard result == errSecSuccess else {
+                    fatalError("Failed to generate secure random device salt")
+                }
+                deviceSalt = randomData.base64EncodedString()
+                UserDefaults.standard.set(deviceSalt, forKey: deviceSaltKey)
+            }
+            components.append(deviceSalt)
+            
+            if components.count == 2 {
+                if let fallbackUUID = getStableFallbackUUID() {
+                    components.append(fallbackUUID)
+                } else {
+                    components.append("mac-device-\(getSystemUptime())")
+                }
+            }
+            
+            let combined = components.joined(separator: "|")
+            let hash = SHA256.hash(data: Data(combined.utf8))
+            return Data(hash)
+        }
+        
+        private static func getStableFallbackUUID() -> String? {
+            let key = "com.app.stable-device-uuid"
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: key,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            
+            if status == errSecSuccess, let data = result as? Data, let uuid = String(data: data, encoding: .utf8) {
+                return uuid
+            }
+            
+            let newUUID = UUID().uuidString
+            let storeQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: key,
+                kSecValueData as String: newUUID.data(using: .utf8) ?? Data(),
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            ]
+            SecItemAdd(storeQuery as CFDictionary, nil)
+            return newUUID
+        }
+        
+        private static func getSystemUptime() -> String {
+            var mib: [Int32] = [Int32(CTL_KERN), Int32(KERN_BOOTTIME)]
+            var boottime = timeval()
+            var size = MemoryLayout<timeval>.size
+            
+            if sysctl(&mib, 2, &boottime, &size, nil, 0) == 0 {
+                return "\(boottime.tv_sec)"
+            }
+            return "\(Date().timeIntervalSince1970)"
+        }
+        
+        private static func deviceBoundInfo(label: String = AADEntryBindingLabel) -> Data {
+            var info = Data(label.utf8)
+            info.append(getDeviceID())
+            return info
+        }
+        
+        private static func tokenAAD() -> Data {
+            return deviceBoundInfo(label: AADMasterTokenLabel)
+        }
+        
+        private static func isVirtualMachineCPU(_ model: String) -> Bool {
+            let lower = model.lowercased()
+            let vmIndicators = ["virtual", "vmware", "parallels", "qemu", "virtualbox", "hyperv"]
+            return vmIndicators.contains { lower.contains($0) }
+        }
+        
+        private static func isVirtualMachineMAC(_ mac: String) -> Bool {
+            let vmPrefixes = ["00:05:69", "00:0C:29", "00:50:56", "08:00:27", "00:1C:14", "00:03:FF", "00:15:5D"]
+            let normalized = mac.uppercased()
+            return vmPrefixes.contains { normalized.hasPrefix($0) }
+        }
+        
+        private static func getPrimaryMACAddress() -> String? {
+            guard let interfaces = SCNetworkInterfaceCopyAll() as? [SCNetworkInterface] else { return nil }
+            for interface in interfaces {
+                if let mac = SCNetworkInterfaceGetHardwareAddressString(interface) as String?, !mac.isEmpty {
+                    return mac
+                }
+            }
+            return nil
+        }
+        
+        private static func getHardwareSerialNumber() -> String? {
+            let platformExpert = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+            defer { IOObjectRelease(platformExpert) }
+            if platformExpert == 0 { return nil }
+            return IORegistryEntryCreateCFProperty(platformExpert, "IOPlatformSerialNumber" as CFString, kCFAllocatorDefault, 0)?.takeUnretainedValue() as? String
+        }
+        
+        // MARK: - Storage Backend Migration
+        
+    // MARK: - Fixed Storage Backend Migration (with proper backend switching)
+
+    static func setStorageBackendSecurely(_ backend: StorageBackend, masterPassword: Data, context: NSManagedObjectContext) -> Bool {
+        print("🔄 Starting migration to \(backend.rawValue)...")
+        
+        let old = currentBackend()
+        print("   Old backend: \(old.rawValue)")
+        print("   New backend: \(backend.rawValue)")
+        
+        guard old != backend else {
+            print("✅ Already using \(backend.rawValue)")
+            return true
+        }
+        
+        print("\n📦 Step 1: Loading data from old backend (\(old.rawValue))...")
+        
+        // Load salt from OLD backend (explicitly specify OLD backend)
+        let zeroKey = SymmetricKey(data: Data(repeating: 0, count: 32))
+        
+        // IMPORTANT: Save the old backend before we change it
+        let savedBackend = storageBackend
+        
+        guard let oldSalt = loadRaw(saltKey, from: old, using: zeroKey) else {
+            print("❌ Failed to load salt from old backend")
+            return false
+        }
+        print("✅ Salt loaded from old backend")
+        
+        // Derive key from password using old salt
+        print("\n🔑 Step 2: Deriving key from password...")
+        let oldDerivedKey = deriveKey(password: masterPassword, salt: oldSalt)
+        defer {
+            var wipe = Data(oldDerivedKey.withUnsafeBytes { Data($0) })
+            wipe.resetBytes(in: 0..<wipe.count)
+        }
+        print("✅ Key derived")
+        
+        // Load token from OLD backend
+        print("\n🎫 Step 3: Loading token from old backend...")
+        guard let oldToken = loadRaw(tokenKey, from: old, using: oldDerivedKey) else {
+            print("❌ Failed to load token from old backend")
+            return false
+        }
+        print("✅ Token loaded from old backend")
+        
+        // Setup NEW backend if it's keychain
+        if backend == .keychain {
+            print("\n🔐 Step 4: Setting up keychain for new backend...")
+            guard CustomKeychainManager.shared.setupKeychain(withPassword: masterPassword) else {
+                print("❌ Failed to setup keychain")
+                return false
+            }
+            print("✅ Keychain setup complete")
+        }
+        
+        // CRITICAL: Switch to new backend BEFORE saving
+        print("\n🔄 Step 4.5: Switching to new backend...")
+        storageBackend = backend
+        print("✅ Backend switched to \(backend.rawValue)")
+        
+        // Save salt to NEW backend (now storageBackend is correct)
+        print("\n💾 Step 5: Saving salt to new backend...")
+        guard saveRaw(oldSalt, key: saltKey, to: backend, using: zeroKey) else {
+            print("❌ Failed to save salt to new backend")
+            // Rollback
+            storageBackend = savedBackend
+            return false
+        }
+        print("✅ Salt saved to new backend")
+        
+        // Save token to NEW backend
+        print("\n💾 Step 6: Saving token to new backend...")
+        guard saveRaw(oldToken, key: tokenKey, to: backend, using: oldDerivedKey) else {
+            print("❌ Failed to save token to new backend")
+            // Rollback
+            storageBackend = savedBackend
+            return false
+        }
+        print("✅ Token saved to new backend")
+        
+        // Verify the migration worked by trying to decrypt the token
+        print("\n✨ Step 7: Verifying migration...")
+        let isValid = oldDerivedKey.withUnsafeBytes { keyBuffer -> Bool in
+            let key = SymmetricKey(data: Data(keyBuffer))
+            guard let sealedBox = try? AES.GCM.SealedBox(combined: oldToken),
+                  let decrypted = try? AES.GCM.open(sealedBox, using: key, authenticating: tokenAAD()) else {
+                return false
+            }
+            return decrypted == "verify-v2".data(using: .utf8)
+        }
+        
+        if !isValid {
+            print("❌ Migration verification failed - rolling back")
+            storageBackend = savedBackend
+            deleteRaw(tokenKey, from: backend)
+            deleteRaw(saltKey, from: backend)
+            return false
+        }
+        print("✅ Migration verified successfully")
+        
+        // Clean up old backend
+        print("\n🧹 Step 8: Cleaning up old backend...")
+        secureDeleteFromBackend(old)
+        print("✅ Old backend cleaned")
+        
+        // Reset failed attempts
+        setFailedAttempts(0)
+        
+        print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("✅ MIGRATION COMPLETE")
+        print("   From: \(old.rawValue)")
+        print("   To: \(backend.rawValue)")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        
+        return true
+    }
+        
+        private static func secureDeleteFromBackend(_ backend: StorageBackend) {
+            let randomData = Data(count: 1024)
+            _ = saveRaw(randomData, key: tokenKey, to: backend, using: SymmetricKey(size: .bits256))
+            _ = saveRaw(randomData, key: saltKey, to: backend, using: SymmetricKey(size: .bits256))
+            deleteRaw(tokenKey, from: backend)
+            deleteRaw(saltKey, from: backend)
+            
+            if backend == .keychain {
+                CustomKeychainManager.shared.reset()
+            }
+        }
+        
+        static func setStorageBackendWithoutMigration(_ backend: StorageBackend, context: NSManagedObjectContext) {
+            let old = currentBackend()
+            guard old != backend else { return }
+            storageBackend = backend
+            clearKey()
+            wipeAllData(context: context)
+        }
+        
+        // MARK: - Input Validation
+        
+        private static func validatePasswordInput(_ password: Data) throws {
+            guard password.count >= minPasswordLength else { throw SecurityError.invalidInput }
+            guard password.count <= maxPasswordLength else { throw SecurityError.invalidInput }
+        }
+        
+        private static func validateSaltInput(_ salt: Data) throws {
+            guard salt.count >= minSaltLength else { throw SecurityError.invalidInput }
+            guard salt.count <= maxSaltLength else { throw SecurityError.invalidInput }
+        }
+        
+        private static func validateEncryptedInput(_ data: Data) throws {
+            guard data.count >= minEncryptedDataSize else { throw SecurityError.invalidInput }
+            guard data.count <= maxEncryptedDataSize else { throw SecurityError.invalidInput }
+        }
+}
+
+// MARK: - Storage Operations
+
+private extension CryptoHelper {
+    @discardableResult
+    static func saveRaw(_ data: Data, key: String, to backend: StorageBackend, using masterKey: SymmetricKey) -> Bool {
+        switch backend {
+        case .keychain:
+            return saveToKeychainEncrypted(data, key: key, using: masterKey)
+        case .local:
+            return saveToLocalFileEncrypted(data, name: key, using: masterKey)
+        }
+    }
+    
+    static func loadRaw(_ key: String, from backend: StorageBackend, using masterKey: SymmetricKey) -> Data? {
+        switch backend {
+        case .keychain:
+            return loadFromKeychainDecrypted(key: key, using: masterKey)
+        case .local:
+            return loadFromLocalFileDecrypted(name: key, using: masterKey)
+        }
+    }
+    
+    static func deleteRaw(_ key: String, from backend: StorageBackend) {
+        switch backend {
+        case .keychain: deleteFromKeychain(key: key)
+        case .local: deleteLocalFile(name: key)
+        }
+    }
+}
+// MARK: - Custom Keychain Backend
+
+private extension CryptoHelper {
+
+    /// Save plaintext securely to Keychain with AES-GCM + HMAC integrity
+    @discardableResult
+    static func saveToKeychainEncrypted(_ plaintext: Data, key: String, using masterKey: SymmetricKey) -> Bool {
+        guard storageBackend == .keychain else { return false }
+
+        // Ensure keychain is initialized
+        guard CustomKeychainManager.shared.isSetup else {
+            secureLog("❌ Keychain not initialized for saving key: \(key)")
+            return false
+        }
+
+        do {
+            let aad = tokenAAD()
+            let sealedBox = try AES.GCM.seal(plaintext, using: masterKey, authenticating: aad)
+            guard let combined = sealedBox.combined else { return false }
+
+            // Compute HMAC for integrity
+            let hmacKey = SymmetricKey(data: Data("hmac-integrity-v1".utf8))
+            let hmac = HMAC<SHA256>.authenticationCode(for: combined, using: hmacKey)
+
+            var finalData = Data(hmac)
+            finalData.append(combined)
+
+            // Save to keychain
+            let success = CustomKeychainManager.shared.save(plaintext, key: key, encrypted: finalData)
+            if !success { secureLog("❌ Failed to save keychain key: \(key)") }
+            return success
+
+        } catch {
+            secureLog("❌ Keychain save error for key \(key): \(error)")
+            return false
+        }
+    }
+
+    /// Load and decrypt data from Keychain
+    static func loadFromKeychainDecrypted(key: String, using masterKey: SymmetricKey) -> Data? {
+        guard storageBackend == .keychain else { return nil }
+
+        // Ensure keychain is initialized
+        guard CustomKeychainManager.shared.isSetup else {
+            secureLog("❌ Keychain not initialized for loading key: \(key)")
+            return nil
+        }
+
+        // Load encrypted data
+        guard let finalData = CustomKeychainManager.shared.load(key: key) else {
+            secureLog("❌ No keychain reference for key: \(key)")
+            return nil
+        }
+        guard finalData.count > 32 else {
+            secureLog("❌ Keychain data too short for key: \(key)")
+            return nil
+        }
+
+        let storedHMAC = finalData.prefix(32)
+        let encryptedData = finalData.dropFirst(32)
+        let hmacKey = SymmetricKey(data: Data("hmac-integrity-v1".utf8))
+        let computedHMAC = HMAC<SHA256>.authenticationCode(for: encryptedData, using: hmacKey)
+
+        // Verify HMAC
+        guard constantTimeCompare(Data(storedHMAC), Data(computedHMAC)) else {
+            secureLog("❌ HMAC verification failed for key: \(key)")
+            return nil
+        }
+
+        // Decrypt
+        do {
+            let sealedBox = try AES.GCM.SealedBox(combined: encryptedData)
+            let aad = tokenAAD()
+            return try AES.GCM.open(sealedBox, using: masterKey, authenticating: aad)
+        } catch {
+            secureLog("❌ AES decryption failed for key \(key): \(error)")
+            return nil
+        }
+    }
+
+    /// Load raw data from keychain without decryption (for internal use)
+    static func loadFromKeychain(key: String) -> Data? {
+        guard storageBackend == .keychain else { return nil }
+        guard CustomKeychainManager.shared.isSetup else {
+            secureLog("❌ Keychain not initialized for raw load key: \(key)")
+            return nil
+        }
+
+        guard let data = CustomKeychainManager.shared.load(key: key) else {
+            secureLog("❌ No keychain reference for raw load key: \(key)")
+            return nil
+        }
+        return data
+    }
+
+    /// Delete key from Keychain
+    static func deleteFromKeychain(key: String) {
+        guard storageBackend == .keychain else { return }
+        CustomKeychainManager.shared.delete(key: key)
+    }
+}
+
+
+// MARK: - Local File Backend
+
+private extension CryptoHelper {
+    static var baseDirURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let bundleID = Bundle.main.bundleIdentifier ?? ".com.secure.password-manager"
+        return appSupport.appendingPathComponent(bundleID).appendingPathComponent(".Crypto", isDirectory: true)
+    }
+    
+    static func ensureDir() throws {
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: baseDirURL.path) {
+            try fileManager.createDirectory(at: baseDirURL, withIntermediateDirectories: true, attributes: [.posixPermissions: NSNumber(value: Int16(0o700))])
+        }
+        let path = baseDirURL.path
+        let attrName = "com.apple.metadata:com_apple_backup_excludeItem"
+        let value = "Y"
+        value.withCString { ptr in
+            setxattr(path, attrName, ptr, strlen(ptr), 0, 0)
+        }
+    }
+    
+    @discardableResult
+    static func saveToLocalFileEncrypted(_ plaintext: Data, name: String, using masterKey: SymmetricKey) -> Bool {
+        do {
+            try ensureDir()
+            let aad = deviceBoundInfo(label: AADMasterTokenLabel)
+            let sealedBox = try AES.GCM.seal(plaintext, using: masterKey, authenticating: aad)
+            let url = baseDirURL.appendingPathComponent("\(name).enc")
+            try sealedBox.combined!.write(to: url, options: [.atomic, .completeFileProtection])
+            try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: url.path)
+            return true
+        } catch {
+            return false
+        }
+    }
+    
+    static func loadFromLocalFileDecrypted(name: String, using masterKey: SymmetricKey) -> Data? {
+        do {
+            let url = baseDirURL.appendingPathComponent("\(name).enc")
+            let encryptedData = try Data(contentsOf: url)
+            let aad = deviceBoundInfo(label: AADMasterTokenLabel)
+            let sealedBox = try AES.GCM.SealedBox(combined: encryptedData)
+            return try AES.GCM.open(sealedBox, using: masterKey, authenticating: aad)
+        } catch {
+            return nil
+        }
+    }
+    
+    static func loadFromLocalFile(name: String) -> Data? {
+        let url = baseDirURL.appendingPathComponent("\(name).enc")
+        return try? Data(contentsOf: url)
+    }
+    
+    static func deleteLocalFile(name: String) {
+        let url = baseDirURL.appendingPathComponent("\(name).enc")
+        if FileManager.default.fileExists(atPath: url.path) {
+            if let fileHandle = try? FileHandle(forWritingTo: url) {
+                let fileSize = fileHandle.seekToEndOfFile()
+                fileHandle.seek(toFileOffset: 0)
+                for _ in 0..<3 {
+                    var randomData = Data(count: Int(fileSize))
+                    _ = randomData.withUnsafeMutableBytes { buffer in
+                        SecRandomCopyBytes(kSecRandomDefault, buffer.count, buffer.baseAddress!)
+                    }
+                    fileHandle.write(randomData)
+                    fileHandle.synchronizeFile()
+                }
+                try? fileHandle.close()
+            }
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+}
+
+// MARK: - Failed Attempts & Security Policy
+
+extension CryptoHelper {
+    static var failedAttempts: Int {
+        get { UserDefaults.standard.integer(forKey: failedAttemptsKey) }
+        set { UserDefaults.standard.set(newValue, forKey: failedAttemptsKey) }
+    }
+    
+    private static func incrementFailedAttemptsAndMaybeWipe(context: NSManagedObjectContext?) {
+        failedAttempts += 1
+        secureLog("Failed unlock attempt: \(failedAttempts)")
+        applyBackoffDelay(for: failedAttempts)
+        if failedAttempts >= maxAttempts {
+            wipeAllData(context: context)
+            failedAttempts = 0
+        }
+    }
+    
+    private static func setFailedAttempts(_ value: Int) {
+        failedAttempts = value
+    }
+    
+    private static func applyBackoffDelay(for attempts: Int) {
+        let multiplier = pow(2.0, Double(max(0, attempts - 1)))
+        let delay = min(backoffBase * multiplier, backoffMax)
+        if delay > 0 {
+            Thread.sleep(forTimeInterval: delay)
+        }
+    }
+    
+    static func wipeAllData(context: NSManagedObjectContext?) {
+        clearCurrentStorage()
+        clearKey()
+        guard let ctx = context else { return }
+        let passwordRequest: NSFetchRequest<NSFetchRequestResult> = NSFetchRequest(entityName: "PasswordEntry")
+        let folderRequest: NSFetchRequest<NSFetchRequestResult> = NSFetchRequest(entityName: "Folder")
+        let deletePasswords = NSBatchDeleteRequest(fetchRequest: passwordRequest)
+        let deleteFolders = NSBatchDeleteRequest(fetchRequest: folderRequest)
+        do {
+            try ctx.execute(deletePasswords)
+            try ctx.execute(deleteFolders)
+            try ctx.save()
+        } catch {
+            ctx.rollback()
+        }
+    }
+}
+
+// MARK: - Master Password Functions
+
+extension CryptoHelper {
+    static func setMasterPassword(_ password: Data) {
+        var salt = Data(count: 32)
+        let result = salt.withUnsafeMutableBytes { buffer in
+            SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
+        }
+        guard result == errSecSuccess else { return }
+        
+        guard let masterKey = try? deriveKeySecurely(password: password, salt: salt) else {
+            clearKey()
+            return
+        }
+        
+        // Setup custom keychain with master password if using keychain backend
+        if storageBackend == .keychain {
+            guard CustomKeychainManager.shared.setupKeychain(withPassword: password) else {
+                clearKey()
+                return
+            }
+        }
+        
+        keyStorage = SecData(Data(masterKey.withUnsafeBytes { Data($0) }))
+        let aad = deviceBoundInfo(label: AADMasterTokenLabel)
+        guard let tokenData = "verify-v2".data(using: .utf8) else {
+            clearKey()
+            return
+        }
+        do {
+            let sealedBox = try AES.GCM.seal(tokenData, using: masterKey, authenticating: aad)
+            let tempKey = SymmetricKey(data: Data(repeating: 0, count: 32))
+            let saltSaved = saveRaw(salt, key: saltKey, to: storageBackend, using: tempKey)
+            let tokenSaved = saveRaw(sealedBox.combined!, key: tokenKey, to: storageBackend, using: masterKey)
+            guard saltSaved && tokenSaved else {
+                clearKey()
+                return
+            }
+            setFailedAttempts(0)
+            updateActivity()
+        } catch {
+            clearKey()
+        }
+    }
+    
+    static func unlockMasterPassword(_ password: Data, context: NSManagedObjectContext) -> Bool {
+        // Setup/unlock custom keychain with master password
+        if storageBackend == .keychain {
+            guard CustomKeychainManager.shared.setupKeychain(withPassword: password) else {
+                incrementFailedAttemptsAndMaybeWipe(context: context)
+                return false
+            }
+        }
+        
+        let tempKey = SymmetricKey(data: Data(repeating: 0, count: 32))
+        guard let salt = loadRaw(saltKey, from: storageBackend, using: tempKey) else {
+            incrementFailedAttemptsAndMaybeWipe(context: context)
+            return false
+        }
+        let masterKey = deriveKey(password: password, salt: salt)
+        keyStorage = SecData(Data(masterKey.withUnsafeBytes { Data($0) }))
+        let aad = deviceBoundInfo(label: AADMasterTokenLabel)
+        guard let sealedData = loadRaw(tokenKey, from: storageBackend, using: masterKey),
+              let sealedBox = try? AES.GCM.SealedBox(combined: sealedData),
+              let decrypted = try? AES.GCM.open(sealedBox, using: masterKey, authenticating: aad),
+              let expected = "verify-v2".data(using: .utf8),
+              constantTimeCompare(decrypted, expected) else {
+            clearKey()
+            incrementFailedAttemptsAndMaybeWipe(context: context)
+            return false
+        }
+        setFailedAttempts(0)
+        var mutablePassword = password
+        mutablePassword.resetBytes(in: 0..<mutablePassword.count)
+        updateActivity()
+        return true
+    }
+    
+    static func lockSession() {
+        clearKey()
+    }
+    
+    static func autoLockIfNeeded() {
+        if isSessionExpired() {
+            clearKey()
+        }
+    }
+    
+    static var biometricUnlockEnabled: Bool {
+        get { getBiometricUnlockEnabled() }
+        set { setBiometricUnlockEnabled(newValue) }
+    }
+    
+    static func enableBiometricUnlock() {
+        guard BiometricManager.shared.isBiometricAvailable else { return }
+        biometricUnlockEnabled = true
+    }
+    
+    static func disableBiometricUnlock() {
+        biometricUnlockEnabled = false
+    }
+}
+
+// MARK: - CryptoHelper Session Management Extension
+
+extension CryptoHelper {
+    private static var sessionStartTime: Date = Date()
+    
+    static func getSessionElapsed() -> TimeInterval {
+        return Date().timeIntervalSince(sessionStartTime)
+    }
+    
+    static func resetSessionTimer() {
+        sessionStartTime = Date()
+    }
+}
+
+// MARK: - Password Encryption/Decryption
+
+extension CryptoHelper {
+    static func encryptPasswordData(_ plaintext: Data, salt: Data, aad: Data? = nil) -> Data? {
+        guard let keyStorage = keyStorage else { return nil }
+        if isSessionExpired() {
+            clearKey()
+            NotificationCenter.default.post(name: .sessionExpired, object: nil)
+            return nil
+        }
+        guard plaintext.count <= 4096 else { return nil }
+        do {
+            try validatePasswordInput(plaintext)
+            try validateSaltInput(salt)
+        } catch {
+            return nil
+        }
+        updateActivity()
+        let deviceID = getDeviceID()
+        return try? keyStorage.withUnsafeBytes { keyBuffer in
+            let masterKey = SymmetricKey(data: Data(keyBuffer))
+            let info = Data(AADEntryBindingLabel.utf8) + deviceID
+            let entryKeyData = HKDF<SHA256>.deriveKey(inputKeyMaterial: masterKey, salt: salt, info: info, outputByteCount: 32)
+            let entryKey = SymmetricKey(data: entryKeyData)
+            let aadData = aad ?? Data()
+            let sealed = try AES.GCM.seal(plaintext, using: entryKey, authenticating: aadData)
+            return sealed.combined
+        }
+    }
+    
+    static func decryptPasswordData(_ encrypted: Data, salt: Data, aad: Data? = nil) -> Data? {
+        guard let keyStorage = keyStorage, !isSessionExpired() else { return nil }
+        guard encrypted.count <= 8192 else { return nil }
+        do {
+            try validateEncryptedInput(encrypted)
+            try validateSaltInput(salt)
+        } catch {
+            return nil
+        }
+        updateActivity()
+        let deviceID = getDeviceID()
+        return try? keyStorage.withUnsafeBytes { keyBuffer in
+            let masterKey = SymmetricKey(data: Data(keyBuffer))
+            let info = Data(AADEntryBindingLabel.utf8) + deviceID
+            let entryKeyData = HKDF<SHA256>.deriveKey(inputKeyMaterial: masterKey, salt: salt, info: info, outputByteCount: 32)
+            let entryKey = SymmetricKey(data: entryKeyData)
+            let sealedBox = try AES.GCM.SealedBox(combined: encrypted)
+            let decrypted = try AES.GCM.open(sealedBox, using: entryKey, authenticating: aad ?? Data())
+            return decrypted
+        }
+    }
+    
+    static func encryptPassword(_ plaintext: String, salt: Data, aad: Data? = nil) -> Data? {
+        return encryptPasswordData(Data(plaintext.utf8), salt: salt, aad: aad)
+    }
+    
+    static func decryptPassword(_ encrypted: Data, salt: Data, aad: Data? = nil) -> String? {
+        guard let data = decryptPasswordData(encrypted, salt: salt, aad: aad) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
+// MARK: - Security Validation
+
+extension CryptoHelper {
+    static func initializeSecurity() {
+        if SecurityValidator.isDebuggerAttached() {
+            secureLog("⚠️ Debugger detected")
+        }
+        if SecurityValidator.isRunningInVM() {
+            secureLog("⚠️ Running in VM")
+        }
+        if !SecurityValidator.validateCodeIntegrity() {
+            secureLog("⚠️ Code integrity check failed")
+        }
+        _ = MemoryPressureMonitor.shared
+        NotificationCenter.default.addObserver(forName: .memoryPressureDetected, object: nil, queue: .main) { _ in
+            clearKeys()
+        }
+    }
+    
+    static func validateSecurityEnvironment() -> Bool {
+        #if !DEBUG
+        if SecurityValidator.isDebuggerAttached() {
+            return false
+        }
+        #endif
+        guard let _ = keyStorage else { return false }
+        if isSessionExpired() {
+            clearKeys()
+            return false
+        }
+        return true
+    }
+    
+    static func performSecureCleanup() {
+        SecureClipboard.shared.clearClipboard()
+        clearKeys()
+    }
+}
+
+// MARK: - 2FA Integration
+
+extension CryptoHelper {
+    static func unlockWithTwoFactor(masterPassword: Data, twoFactorCode: String?, context: NSManagedObjectContext) -> Bool {
+        guard unlockMasterPassword(masterPassword, context: context) else { return false }
+        if TwoFactorAuthManager.shared.isEnabled {
+            guard let code = twoFactorCode, TwoFactorAuthManager.shared.verify(code: code, masterPassword: masterPassword) else {
+                clearKey()
+                return false
+            }
+        }
+        return true
+    }
+    
+    static func requiresTwoFactor() -> Bool {
+        return TwoFactorAuthManager.shared.isEnabled
+    }
+}
+
+// MARK: - HKDF Implementation
+
+private enum HKDFError: Error {
+    case invalidOutputSize
+}
+
+private struct HKDF<Hash: HashFunction> {
+    static func deriveKey(inputKeyMaterial: SymmetricKey, salt: Data, info: Data, outputByteCount: Int) -> Data {
+        let prk = HMAC<Hash>.authenticationCode(for: salt.isEmpty ? Data() : salt, using: inputKeyMaterial)
+        var previous = Data()
+        var output = Data()
+        var counter: UInt8 = 1
+        while output.count < outputByteCount {
+            var hmacInput = Data()
+            hmacInput.append(previous)
+            hmacInput.append(info)
+            hmacInput.append(counter)
+            let hmacKey = SymmetricKey(data: Data(prk))
+            let digest = HMAC<Hash>.authenticationCode(for: hmacInput, using: hmacKey)
+            previous = Data(digest)
+            output.append(previous)
+            counter = counter &+ 1
+        }
+        return output.prefix(outputByteCount)
+    }
+}
+
+
+// MARK: - Secure Logging
+
+private func secureLog(_ message: String) {
+    #if DEBUG
+    if #available(macOS 11.0, *) {
+        let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.app", category: "Security")
+        logger.info("\(message, privacy: .private)")
+    } else {
+        os_log("%{private}s", type: .info, message)
+    }
+    #endif
+}
+
+
+// MARK: - Secure Settings Storage Extension
+@MainActor
+extension CryptoHelper {
+    
+    // MARK: - Private Keys for Settings
+    
+    private static let settingsPrefix = "SecureSetting."
+    
+    private enum SettingKey: String {
+        case sessionTimeout = "SessionTimeout"
+        case autoLockOnBackground = "AutoLockOnBackground"
+        case autoLockEnabled = "AutoLockEnabled"
+        case autoLockInterval = "AutoLockInterval"
+        case autoCloseEnabled = "AutoCloseEnabled"
+        case autoCloseInterval = "AutoCloseInterval"
+        case autoClearClipboard = "AutoClearClipboard"
+        case clearDelay = "ClearDelay"
+        case themeName = "Theme.name"
+        case themeSelection = "Theme.selection"
+        case themeTile = "Theme.tile"
+        case themeBadge = "Theme.badge"
+        case themeBackground = "Theme.background"
+        case biometricUnlockEnabled = "BiometricUnlockEnabled"
+        @MainActor
+        var fullKey: String {
+            return settingsPrefix + rawValue
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    private static func saveSetting<T: Codable>(_ value: T, key: SettingKey) -> Bool {
+        do {
+            let encoder = JSONEncoder()
+            let data = try encoder.encode(value)
+            
+            // Use a simple encryption key derived from device ID
+            let deviceKey = SymmetricKey(data: getDeviceID())
+            let encrypted = try AES.GCM.seal(data, using: deviceKey)
+            
+            guard let combined = encrypted.combined else { return false }
+            
+            return CustomKeychainManager.shared.save(data, key: key.fullKey, encrypted: combined)
+        } catch {
+            print("❌ Failed to save setting \(key.rawValue): \(error)")
+            return false
+        }
+    }
+    
+    /*private static func loadSetting<T: Codable>(key: SettingKey, defaultValue: T) -> T {
+        guard let encryptedData = CustomKeychainManager.shared.load(key: key.fullKey) else {
+            return defaultValue
+        }
+        
+        do {
+            let deviceKey = SymmetricKey(data: getDeviceID())
+            let sealedBox = try AES.GCM.SealedBox(combined: encryptedData)
+            let decryptedData = try AES.GCM.open(sealedBox, using: deviceKey)
+            
+            let decoder = JSONDecoder()
+            let value = try decoder.decode(T.self, from: decryptedData)
+            return value
+        } catch {
+            print("⚠️ Failed to load setting \(key.rawValue): \(error)")
+            return defaultValue
+        }
+    }*/
+    
+    private static func loadSetting<T: Codable>(key: SettingKey, defaultValue: T) -> T {
+        // Don't try to load if keychain isn't initialized
+        guard CustomKeychainManager.shared.isSetup else {
+            print("⚠️ Keychain not setup yet, returning default for \(key.rawValue)")
+            return defaultValue
+        }
+        
+        guard let encryptedData = CustomKeychainManager.shared.load(key: key.fullKey) else {
+            // Key doesn't exist yet - this is normal on first run
+            // No need to print error for -25300
+            return defaultValue
+        }
+        
+        do {
+            let deviceKey = SymmetricKey(data: getDeviceID())
+            let sealedBox = try AES.GCM.SealedBox(combined: encryptedData)
+            let decryptedData = try AES.GCM.open(sealedBox, using: deviceKey)
+            
+            let decoder = JSONDecoder()
+            let value = try decoder.decode(T.self, from: decryptedData)
+            return value
+        } catch {
+            print("⚠️ Failed to decrypt setting \(key.rawValue): \(error)")
+            return defaultValue
+        }
+    }
+    
+    private static func saveLayoutSetting(_ value: String, folderKey: String) -> Bool {
+        let fullKey = "\(settingsPrefix)Layout.\(folderKey)"
+        
+        do {
+            let data = value.data(using: .utf8) ?? Data()
+            let deviceKey = SymmetricKey(data: getDeviceID())
+            let encrypted = try AES.GCM.seal(data, using: deviceKey)
+            
+            guard let combined = encrypted.combined else { return false }
+            
+            return CustomKeychainManager.shared.save(data, key: fullKey, encrypted: combined)
+        } catch {
+            print("❌ Failed to save layout setting: \(error)")
+            return false
+        }
+    }
+    
+    private static func loadLayoutSetting(folderKey: String) -> String? {
+        let fullKey = "\(settingsPrefix)Layout.\(folderKey)"
+        
+        // Don't try to load if keychain isn't initialized
+        guard CustomKeychainManager.shared.isSetup else {
+            return nil
+        }
+        
+        guard let encryptedData = CustomKeychainManager.shared.load(key: fullKey) else {
+            // Key doesn't exist yet - this is normal, no need to log
+            return nil
+        }
+        
+        do {
+            let deviceKey = SymmetricKey(data: getDeviceID())
+            let sealedBox = try AES.GCM.SealedBox(combined: encryptedData)
+            let decryptedData = try AES.GCM.open(sealedBox, using: deviceKey)
+            return String(data: decryptedData, encoding: .utf8)
+        } catch {
+            print("⚠️ Failed to load layout setting: \(error)")
+            return nil
+        }
+    }
+    
+    // MARK: - Session Timeout
+    
+    static func getSessionTimeout() -> TimeInterval {
+        return loadSetting(key: .sessionTimeout, defaultValue: 900.0)
+    }
+    
+    static func setSessionTimeout(_ value: TimeInterval) {
+        _ = saveSetting(value, key: .sessionTimeout)
+    }
+    
+    // MARK: - Auto-Lock on Background
+    
+    static func getAutoLockOnBackground() -> Bool {
+        return loadSetting(key: .autoLockOnBackground, defaultValue: true)
+    }
+    
+    static func setAutoLockOnBackground(_ value: Bool) {
+        _ = saveSetting(value, key: .autoLockOnBackground)
+    }
+    
+    // MARK: - Auto-Lock Enabled
+    
+    static func getAutoLockEnabled() -> Bool {
+        return loadSetting(key: .autoLockEnabled, defaultValue: false)
+    }
+    
+    static func setAutoLockEnabled(_ value: Bool) {
+        _ = saveSetting(value, key: .autoLockEnabled)
+    }
+    
+    // MARK: - Auto-Lock Interval
+    
+    static func getAutoLockInterval() -> Int {
+        return loadSetting(key: .autoLockInterval, defaultValue: 60)
+    }
+    
+    static func setAutoLockInterval(_ value: Int) {
+        _ = saveSetting(value, key: .autoLockInterval)
+        
+        // Notify that settings changed
+        NotificationCenter.default.post(name: .autoLockSettingsChanged, object: nil)
+    }
+    
+    // MARK: - Auto-Close Enabled
+    
+    static func getAutoCloseEnabled() -> Bool {
+        return loadSetting(key: .autoCloseEnabled, defaultValue: false)
+    }
+    
+    static func setAutoCloseEnabled(_ value: Bool) {
+        _ = saveSetting(value, key: .autoCloseEnabled)
+    }
+    
+    // MARK: - Auto-Close Interval
+    
+    static func getAutoCloseInterval() -> Int {
+        return loadSetting(key: .autoCloseInterval, defaultValue: 10)
+    }
+    
+    static func setAutoCloseInterval(_ value: Int) {
+        _ = saveSetting(value, key: .autoCloseInterval)
+    }
+    
+    // MARK: - Auto-Clear Clipboard
+    
+    static func getAutoClearClipboard() -> Bool {
+        return loadSetting(key: .autoClearClipboard, defaultValue: true)
+    }
+    
+    static func setAutoClearClipboard(_ value: Bool) {
+        _ = saveSetting(value, key: .autoClearClipboard)
+    }
+    
+    // MARK: - Clear Delay
+    
+    static func getClearDelay() -> Double {
+        return loadSetting(key: .clearDelay, defaultValue: 10.0)
+    }
+    
+    static func setClearDelay(_ value: Double) {
+        _ = saveSetting(value, key: .clearDelay)
+    }
+    
+    // MARK: - Biometric Unlock (moved from UserDefaults)
+    
+    static func getBiometricUnlockEnabled() -> Bool {
+        return loadSetting(key: .biometricUnlockEnabled, defaultValue: false)
+    }
+    
+    static func setBiometricUnlockEnabled(_ value: Bool) {
+        _ = saveSetting(value, key: .biometricUnlockEnabled)
+    }
+    
+    // MARK: - Layout Preferences
+    
+    static func getLayoutMode(for folderKey: String) -> String? {
+        // First try folder-specific
+        if let mode = loadLayoutSetting(folderKey: folderKey) {
+            return mode
+        }
+        // Fallback to global default
+        return loadLayoutSetting(folderKey: "global")
+    }
+    
+    static func setLayoutMode(_ mode: String, for folderKey: String) {
+        _ = saveLayoutSetting(mode, folderKey: folderKey)
+        // Also save as global default
+        _ = saveLayoutSetting(mode, folderKey: "global")
+    }
+    
+    // MARK: - Theme Settings
+    
+    static func getThemeName() -> String? {
+        let value: String? = loadSetting(key: .themeName, defaultValue: nil)
+        return value
+    }
+    
+    static func setThemeName(_ name: String) {
+        _ = saveSetting(name, key: .themeName)
+    }
+    
+    static func getThemeSelection() -> String? {
+        let value: String? = loadSetting(key: .themeSelection, defaultValue: nil)
+        return value
+    }
+    
+    static func setThemeSelection(_ color: String) {
+        _ = saveSetting(color, key: .themeSelection)
+    }
+    
+    static func getThemeTile() -> String? {
+        let value: String? = loadSetting(key: .themeTile, defaultValue: nil)
+        return value
+    }
+    
+    static func setThemeTile(_ color: String) {
+        _ = saveSetting(color, key: .themeTile)
+    }
+    
+    static func getThemeBadge() -> String? {
+        let value: String? = loadSetting(key: .themeBadge, defaultValue: nil)
+        return value
+    }
+    
+    static func setThemeBadge(_ color: String) {
+        _ = saveSetting(color, key: .themeBadge)
+    }
+    
+    static func getThemeBackground() -> String? {
+        let value: String? = loadSetting(key: .themeBackground, defaultValue: nil)
+        return value
+    }
+    
+    static func setThemeBackground(_ color: String) {
+        _ = saveSetting(color, key: .themeBackground)
+    }
+    
+    // MARK: - Wipe All Settings
+    
+    static func wipeAllSecureSettings() {
+        let allKeys: [SettingKey] = [
+            .sessionTimeout, .autoLockOnBackground, .autoLockEnabled,
+            .autoLockInterval, .autoCloseEnabled, .autoCloseInterval,
+            .autoClearClipboard, .clearDelay, .themeName, .themeSelection,
+            .themeTile, .themeBadge, .themeBackground, .biometricUnlockEnabled
+        ]
+        
+        for key in allKeys {
+            CustomKeychainManager.shared.delete(key: key.fullKey)
+        }
+        
+        // Also delete layout preferences
+        CustomKeychainManager.shared.delete(key: "\(settingsPrefix)Layout.global")
+    }
+}
+
+// MARK: - Updated SecurityConfigManager
+
+
+extension CryptoHelper {
+    /// Migrate existing UserDefaults settings to secure keychain storage
+    static func migrateUserDefaultsToKeychain() {
+        let defaults = UserDefaults.standard
+        
+        // Migrate session timeout
+        if let timeout = defaults.object(forKey: "SessionTimeout") as? TimeInterval {
+            setSessionTimeout(timeout)
+            defaults.removeObject(forKey: "SessionTimeout")
+        }
+        
+        // Migrate auto-lock on background
+        if let autoLock = defaults.object(forKey: "AutoLockOnBackground") as? Bool {
+            setAutoLockOnBackground(autoLock)
+            defaults.removeObject(forKey: "AutoLockOnBackground")
+        }
+        
+        // Migrate auto-lock enabled
+        if let enabled = defaults.object(forKey: "AutoLockEnabled") as? Bool {
+            setAutoLockEnabled(enabled)
+            defaults.removeObject(forKey: "AutoLockEnabled")
+        }
+        
+        // Migrate auto-lock interval
+        if let interval = defaults.object(forKey: "AutoLockInterval") as? Int {
+            setAutoLockInterval(interval)
+            defaults.removeObject(forKey: "AutoLockInterval")
+        }
+        
+        // Migrate auto-close enabled
+        if let enabled = defaults.object(forKey: "AutoCloseEnabled") as? Bool {
+            setAutoCloseEnabled(enabled)
+            defaults.removeObject(forKey: "AutoCloseEnabled")
+        }
+        
+        // Migrate auto-close interval
+        if let interval = defaults.object(forKey: "AutoCloseInterval") as? Int {
+            setAutoCloseInterval(interval)
+            defaults.removeObject(forKey: "AutoCloseInterval")
+        }
+        
+        // Migrate auto-clear clipboard
+        if let autoClear = defaults.object(forKey: "autoClearClipboard") as? Bool {
+            setAutoClearClipboard(autoClear)
+            defaults.removeObject(forKey: "autoClearClipboard")
+        }
+        
+        // Migrate clear delay
+        if let delay = defaults.object(forKey: "clearDelay") as? Double {
+            setClearDelay(delay)
+            defaults.removeObject(forKey: "clearDelay")
+        }
+        
+        // Migrate theme settings
+        if let name = defaults.string(forKey: "Theme.name") {
+            setThemeName(name)
+            defaults.removeObject(forKey: "Theme.name")
+        }
+        
+        if let selection = defaults.string(forKey: "Theme.selection") {
+            setThemeSelection(selection)
+            defaults.removeObject(forKey: "Theme.selection")
+        }
+        
+        if let tile = defaults.string(forKey: "Theme.tile") {
+            setThemeTile(tile)
+            defaults.removeObject(forKey: "Theme.tile")
+        }
+        
+        if let badge = defaults.string(forKey: "Theme.badge") {
+            setThemeBadge(badge)
+            defaults.removeObject(forKey: "Theme.badge")
+        }
+        
+        if let background = defaults.string(forKey: "Theme.background") {
+            setThemeBackground(background)
+            defaults.removeObject(forKey: "Theme.background")
+        }
+        
+        // Migrate biometric unlock
+        if defaults.object(forKey: "CryptoHelper.BiometricUnlockEnabled") != nil {
+            let enabled = defaults.bool(forKey: "CryptoHelper.BiometricUnlockEnabled")
+            setBiometricUnlockEnabled(enabled)
+            defaults.removeObject(forKey: "CryptoHelper.BiometricUnlockEnabled")
+        }
+        
+        // Migrate layout preferences
+        let layoutPrefix = "com.xcosw.PasswordList.layoutModeByFolder"
+        if let allKeys = defaults.dictionaryRepresentation().keys.filter({ $0.hasPrefix(layoutPrefix) }) as? [String] {
+            for key in allKeys {
+                if let value = defaults.string(forKey: key) {
+                    let folderKey = key.replacingOccurrences(of: "\(layoutPrefix).", with: "")
+                    setLayoutMode(value, for: folderKey)
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+        
+        print("✅ Migration from UserDefaults to secure keychain completed")
+    }
+}
