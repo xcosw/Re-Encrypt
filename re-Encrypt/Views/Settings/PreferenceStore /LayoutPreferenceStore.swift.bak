@@ -1,0 +1,58 @@
+import Foundation
+import SwiftUI
+
+// MARK: - App Initialization Helper
+
+/*struct AppInitializationHelper {
+    /// Call this during app launch after master password is unlocked
+    static func initializeSecureSettings() {
+        // Migrate old UserDefaults to secure keychain
+        CryptoHelper.migrateUserDefaultsToKeychain()
+        
+        // Reload SecurityConfigManager
+        SecurityConfigManager.shared.reload()
+        
+        print("✅ Secure settings initialized")
+    }
+    
+    /// Call this on first app launch or after wipe
+    static func setDefaultSettings() {
+        CryptoHelper.setSessionTimeout(360) // 15 minutes
+        CryptoHelper.setAutoLockOnBackground(true)
+        CryptoHelper.setAutoLockEnabled(true)
+        CryptoHelper.setAutoLockInterval(60)
+        CryptoHelper.setAutoCloseEnabled(true)
+        CryptoHelper.setAutoCloseInterval(10)
+        CryptoHelper.setAutoClearClipboard(true)
+        CryptoHelper.setClearDelay(10.0)
+        
+        print("✅ Default settings applied")
+    }
+}*/
+
+// MARK: - Layout Preference Store
+
+enum SavedLayoutMode: String {
+    case grid
+    case list
+    case compact
+}
+@available(macOS 15.0, *)
+@MainActor
+final class LayoutPreferenceStore {
+    static let shared = LayoutPreferenceStore()
+    
+    private init() {}
+    
+    func layoutMode(for folderKey: String) -> SavedLayoutMode? {
+        guard let raw = CryptoHelper.getLayoutMode(for: folderKey),
+              let mode = SavedLayoutMode(rawValue: raw) else {
+            return nil
+        }
+        return mode
+    }
+    
+    func setLayoutMode(_ mode: SavedLayoutMode, for folderKey: String) {
+        CryptoHelper.setLayoutMode(mode.rawValue, for: folderKey)
+    }
+}
