@@ -1120,40 +1120,22 @@ private extension ContentView {
          }
      }
     // MARK: - Failed Attempts & Lockout
-        
-       
-        private func applyLockout() {
-            let lockoutDuration = min(30, failedAttempts * 5)
-            lockoutTimeRemaining = lockoutDuration
+    private func applyLockout() {
+        let lockoutDuration = min(30, failedAttempts * 5)
+        lockoutTimeRemaining = lockoutDuration
             
-            lockoutTask = Task {
-                for _ in 0..<lockoutDuration {
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    await MainActor.run {
-                        if lockoutTimeRemaining > 0 {
+        lockoutTask = Task {
+            for _ in 0..<lockoutDuration {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                await MainActor.run {
+                    if lockoutTimeRemaining > 0 {
                             lockoutTimeRemaining -= 1
-                        }
                     }
                 }
             }
         }
-    
-    private var lockMessageForReason: String {
-        switch lockReason {
-        case .memoryPressure:
-            return "Locked due to system memory pressure"
-        case .sessionTimeout:
-            return "Your session expired due to inactivity"
-        case .maxAttempts:
-            return "Account locked after too many failed attempts"
-        case .tokenExpired:
-            return "Your security token has expired"
-        case .background:
-            return "App was locked when moved to background"
-        default:
-            return "Enter your master password to continue"
-        }
     }
+    
 // MARK: - Event Handlers
      
      func handleTokenExpired() {

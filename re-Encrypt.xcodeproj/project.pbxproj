@@ -81,6 +81,11 @@
 /* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		172F04732EE89EAC003CB650 /* .github */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = .github;
+			sourceTree = "<group>";
+		};
 		1753D95C2ECB8AD3008D4731 /* core */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -127,6 +132,7 @@
 		2A02FDB22E548FA10011A20E = {
 			isa = PBXGroup;
 			children = (
+				172F04732EE89EAC003CB650 /* .github */,
 				1783DB0D2EE75B7E009B3E7C /* Config */,
 				2A02FDBD2E548FA10011A20E /* re-Encrypt */,
 				1753D95C2ECB8AD3008D4731 /* core */,
@@ -186,6 +192,7 @@
 				1753D9622ECB8AD3008D4731 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
+				172F04732EE89EAC003CB650 /* .github */,
 				1783DB0D2EE75B7E009B3E7C /* Config */,
 				2A02FDBD2E548FA10011A20E /* re-Encrypt */,
 			);
