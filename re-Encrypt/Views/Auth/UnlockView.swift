@@ -186,7 +186,7 @@ struct UnlockView: View {
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(theme.badgeBackground)
+            /*.tint(theme.badgeBackground)*/
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .frame(width: 320)
@@ -212,9 +212,9 @@ struct UnlockView: View {
             
         }
         .padding(40)
-        .appBackground()
-        .background(in: RoundedRectangle(cornerRadius: 20))
-        .shadow(color: .black.opacity(0.2), radius: 20, y: 10)
+        //.appBackground()
+        //.background(in: RoundedRectangle(cornerRadius: 20))
+        //.shadow(color: .black.opacity(0.2), radius: 20, y: 10)
     }
     
     // MARK: - Biometric View

@@ -2,8 +2,6 @@
 //  CryptoHelper.swift
 //  re-Encrypt
 //
-//  Secure implementation - Uses existing SecData.swift
-//
 
 import AppKit
 import CryptoKit
@@ -13,14 +11,14 @@ import SystemConfiguration
 import os.log
 
 // MARK: - Security Error Types
-enum SecurityError: Error {
+internal enum SecurityError: Error {
     case cryptographicFailure
     case memoryProtectionFailed
     case invalidInput
     case deviceCompromised
     case sessionExpired
     
-    var localizedDescription: String {
+    internal var localizedDescription: String {
         switch self {
         case .cryptographicFailure: return "Cryptographic operation failed"
         case .memoryProtectionFailed: return "Memory protection failed"
@@ -33,8 +31,7 @@ enum SecurityError: Error {
 
 // MARK: - Enhanced CryptoHelper
 @available(macOS 15.0, *)
-@MainActor
-final class CryptoHelper {
+@MainActor final class CryptoHelper {
     
     // MARK: - Security Constants
     private static let AADMasterTokenLabel = "master-token-v3-macos"
@@ -89,8 +86,7 @@ final class CryptoHelper {
         return Date().timeIntervalSince(_lastActivity) > sessionTimeout
     }
     
-    //private
-     static func updateActivity() {
+    private static func updateActivity() {
         keyLock.lock()
         defer { keyLock.unlock() }
         _lastActivity = Date()

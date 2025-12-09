@@ -711,9 +711,6 @@ private extension ContentView {
     }
     
     func unlockAppLocally() async {
-        CryptoHelper.failedAttempts += 1
-        failedAttempts = CryptoHelper.failedAttempts
-        
         guard !masterPasswordInput.isEmpty else {
             unlockError = "Please enter your master password"
             return
@@ -737,26 +734,39 @@ private extension ContentView {
         if success {
             print("✅ App unlocked locally")
             
+            // ✅ FIXED: Reset failed attempts on successful unlock
+            CryptoHelper.failedAttempts = 0
+            failedAttempts = 0
+            lockoutTimeRemaining = 0
+            lockoutTask?.cancel()
+            
             withAnimation(.easeInOut(duration: 0.3)) {
                 isLocked = false
                 unlockError = nil
                 biometricError = nil
             }
-     
-            //startAutoLockTimer()
             
         } else {
-            unlockError = "Incorrect password"
+            
+            CryptoHelper.failedAttempts += 1
+            failedAttempts = CryptoHelper.failedAttempts
+            
+            unlockError = "Incorrect password (Attempt \(failedAttempts)/\(CryptoHelper.maxAttempts))"
             NSSound.beep()
+            
             if failedAttempts >= CryptoHelper.maxAttempts {
                 // Max attempts reached
+                print("❌ Max attempts reached - requiring setup")
                 CryptoHelper.failedAttempts = 0
-                onRequireSetup()
+                lockAppLocally(reason: .maxAttempts)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    onRequireSetup()
+                }
             } else if failedAttempts >= 3 {
+                // Apply progressive lockout
                 applyLockout()
             }
         }
-        
         
         securePasswordStorage.clear()
     }
@@ -897,18 +907,23 @@ private extension ContentView {
                     .symbolEffect(.pulse)
             }
             
+            // ✅ FIXED: Simplified lock reason display
             VStack(spacing: 8) {
                 Text(lockReason.message)
                     .font(.title.bold())
                     .foregroundColor(theme.primaryTextColor)
                 
-                if let lastReason = lastLockReason, lastReason != lockReason {
+                // Show previous lock reason only if meaningful
+                if let lastReason = lastLockReason,
+                   lastReason != lockReason,
+                   lockReason != .maxAttempts {
                     Text("Previous: \(lastReason.message)")
                         .font(.caption)
                         .foregroundColor(theme.secondaryTextColor.opacity(0.7))
                 }
                 
-                Text("Enter your master password to continue")
+                // ✅ FIXED: Contextual subtitle based on lock reason
+                Text(lockMessageSubtitle)
                     .font(.subheadline)
                     .foregroundColor(theme.secondaryTextColor)
             }
@@ -936,16 +951,19 @@ private extension ContentView {
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(isFocused ? theme.badgeBackground : Color.clear, lineWidth: 2)
                 )
-                 if let unlockError {
-                     HStack {
-                         Image(systemName: "exclamationmark.triangle.fill")
-                             .foregroundColor(.red)
-                         Text(unlockError)
-                             .font(.caption)
-                             .foregroundColor(.red)
-                     }
-                     .transition(.opacity)
-                 }
+                
+                // Error message
+                if let unlockError {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.red)
+                        Text(unlockError)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                    .transition(.opacity)
+                }
+                
                 // Lockout timer
                 if lockoutTimeRemaining > 0 {
                     HStack {
@@ -955,58 +973,74 @@ private extension ContentView {
                             .font(.caption)
                             .foregroundColor(.orange)
                     }
+                    .transition(.opacity)
                 }
-             }
-             .frame(width: 320)
-             
-             Button {
-                 Task { @MainActor in
-                     await unlockAppLocally()
-                 }
-             } label: {
-                 HStack {
-                     if isAttemptingUnlock {
-                         ProgressView()
-                             .scaleEffect(0.8)
-                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                     } else {
-                         Image(systemName: "lock.open.fill")
-                         Text("Unlock")
-                     }
-                 }
-                 .frame(maxWidth: .infinity)
-             }
-             .disabled(isAttemptingUnlock || masterPasswordInput.isEmpty)
-             .buttonStyle(.borderedProminent)
-             //.tint(theme.badgeBackground)
-             .controlSize(.large)
-             .keyboardShortcut(.defaultAction)
-             .frame(width: 320)
-             
-             if CryptoHelper.biometricUnlockEnabled &&
-                 BiometricManager.shared.isBiometricAvailable &&
-                 BiometricManager.shared.isPasswordStored {
-                 VStack(spacing: 8) {
-                     Divider().frame(width: 320)
-                     
-                     Button(action: switchToBiometric) {
-                         HStack {
-                             Image(systemName: BiometricManager.shared.biometricSystemImage())
-                             Text("Use \(BiometricManager.shared.biometricDisplayName()) Instead")
-                         }
-                     }
-                     .buttonStyle(.bordered)
-                     .tint(theme.badgeBackground)
-                     .frame(width: 320)
-                 }
-             }
-         }
-         .padding(40)
-         //.appBackground()
-         //.background(.clear)
-         //.background(in: RoundedRectangle(cornerRadius: 20))
-         //.shadow(color: .black.opacity(0.2), radius: 20, y: 10)
-     }
+            }
+            .frame(width: 320)
+            
+            Button {
+                Task { @MainActor in
+                    await unlockAppLocally()
+                }
+            } label: {
+                HStack {
+                    if isAttemptingUnlock {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    } else {
+                        Image(systemName: "lock.open.fill")
+                        Text("Unlock")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .disabled(isAttemptingUnlock || masterPasswordInput.isEmpty || lockoutTimeRemaining > 0)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
+            .frame(width: 320)
+            
+            if CryptoHelper.biometricUnlockEnabled &&
+                BiometricManager.shared.isBiometricAvailable &&
+                BiometricManager.shared.isPasswordStored {
+                VStack(spacing: 8) {
+                    Divider().frame(width: 320)
+                    
+                    Button(action: switchToBiometric) {
+                        HStack {
+                            Image(systemName: BiometricManager.shared.biometricSystemImage())
+                            Text("Use \(BiometricManager.shared.biometricDisplayName()) Instead")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(theme.badgeBackground)
+                    .frame(width: 320)
+                }
+            }
+        }
+        .padding(40)
+    }
+    
+// MARK: Helper for contextual subtitle
+    private var lockMessageSubtitle: String {
+        switch lockReason {
+        case .maxAttempts:
+            return "Account will be reset for security"
+        case .memoryPressure:
+            return "Enter password to resume"
+        case .sessionTimeout:
+            return "Enter password to continue"
+        case .tokenExpired:
+            return "Enter password to continue"
+        case .background:
+            return "Unlock to continue"
+        case .autoLock:
+            return "Enter password to unlock"
+        default:
+            return "Enter your master password to continue"
+        }
+    }
      
      func attemptBiometricUnlock() {
          print("🔐 Biometric unlock requested")
@@ -1022,46 +1056,50 @@ private extension ContentView {
          }
      }
      
-     func handleBiometricResult(_ result: Result<Data, BiometricError>) async {
-         switch result {
-         case .success(let passwordData):
-             print("✅ Biometric authentication successful")
-             
-             try? await Task.sleep(nanoseconds: 200_000_000)
-             
-             let verified = await CryptoHelper.verifyMasterPassword(
-                 password: passwordData,
-                 context: viewContext
-             )
-             
-             if verified {
-                 print("✅ App unlocked locally via biometric")
-                 
-                 withAnimation(.easeInOut(duration: 0.3)) {
-                     isLocked = false
-                     unlockError = nil
-                     biometricError = nil
-                     showBiometricPromptInLock = false
-                     biometricAttemptedInLock = false
-                 }
-                 
-               
-                 //startAutoLockTimer()
-                 
-             } else {
-                 print("❌ Biometric succeeded but password verification failed")
-                 biometricError = .fallback
-                 unlockError = "Authentication failed. Please use your password."
-                 NSSound.beep()
-             }
-             
-             self.passwordData.secureWipe()
-             
-         case .failure(let error):
-             print("❌ Biometric failed: \(error.errorDescription ?? "unknown")")
-             biometricError = error
-         }
-     }
+// MARK: - handleBiometricResult
+    func handleBiometricResult(_ result: Result<Data, BiometricError>) async {
+        switch result {
+        case .success(let passwordData):
+            print("✅ Biometric authentication successful")
+            
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            
+            let verified = await CryptoHelper.verifyMasterPassword(
+                password: passwordData,
+                context: viewContext
+            )
+            
+            if verified {
+                print("✅ App unlocked locally via biometric")
+                
+                // ✅ FIXED: Reset failed attempts on biometric success
+                CryptoHelper.failedAttempts = 0
+                failedAttempts = 0
+                lockoutTimeRemaining = 0
+                lockoutTask?.cancel()
+                
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isLocked = false
+                    unlockError = nil
+                    biometricError = nil
+                    showBiometricPromptInLock = false
+                    biometricAttemptedInLock = false
+                }
+                
+            } else {
+                print("❌ Biometric succeeded but password verification failed")
+                biometricError = .fallback
+                unlockError = "Authentication failed. Please use your password."
+                NSSound.beep()
+            }
+            
+            self.passwordData.secureWipe()
+            
+        case .failure(let error):
+            print("❌ Biometric failed: \(error.errorDescription ?? "unknown")")
+            biometricError = error
+        }
+    }
      
      func switchToPasswordEntry() {
          withAnimation {
