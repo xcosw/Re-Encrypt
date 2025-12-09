@@ -51,8 +51,7 @@ No cloud. No telemetry. No backdoors. Just unbreakable encryption and total cont
 - Folder organization
 - Customizable themes
 - Secure notes
-- TOTP 2FA support (coming soon)
-- Import from 1Password, Bitwarden, LastPass (planned)
+- TOTP 2FA support Per Entry + Lock/Unlock App
 - Full offline operation
 
 ---
