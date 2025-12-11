@@ -29,7 +29,7 @@ internal enum SecurityError: Error {
     }
 }
 
-// MARK: - Enhanced CryptoHelper
+// MARK: - CryptoHelper
 @available(macOS 15.0, *)
 @MainActor final class CryptoHelper {
     
