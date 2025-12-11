@@ -171,6 +171,41 @@ struct CoreDataHelper {
         }
     }
     
+    static func updatePasswordData(
+            for entry: PasswordEntry,
+            newPasswordData: Data,
+            context: NSManagedObjectContext
+        ) -> Bool {
+            guard CryptoHelper.validateSecurityEnvironment() else { return false }
+            guard let _ = CryptoHelper.keyStorage else { return false }
+            guard let entryId = entry.id, let createdAt = entry.createdAt else { return false }
+            
+            // 1. Generate new salt for the new password
+            let newSalt = newSalt()
+            
+            // 2. Reuse the original AAD
+            let aad = aadForEntry(id: entryId, createdAt: createdAt)
+            
+            // 3. Encrypt the new password
+            guard let encryptedPassword = CryptoHelper.encryptPasswordData(newPasswordData, salt: newSalt, aad: aad) else {
+                return false
+            }
+            
+            // 4. Update the entry
+            entry.encryptedPassword = encryptedPassword
+            entry.salt = newSalt // Crucially update the salt!
+            entry.updatedAt = Date()
+            
+            do {
+                try context.save()
+                return true
+            } catch {
+                print("❌ Error updating password data: \(error.localizedDescription)")
+                context.rollback()
+                return false
+            }
+        }
+    
     static func decryptedPasswordData(for entry: PasswordEntry) -> Data? {
         guard CryptoHelper.validateSecurityEnvironment() else { return nil }
         guard let _ = CryptoHelper.keyStorage else { return nil }
@@ -356,29 +391,27 @@ extension CoreDataHelper {
     }
     
     static func decryptedFolderName(_ folder: Folder) -> SecData? {
-            guard let _ = CryptoHelper.keyStorage else { return nil }
-            guard let encrypted = folder.encryptedName,
-                  let salt = folder.salt,
-                  let id = folder.id else { return nil }
-            let aad = aadForEntry(id: id, createdAt: folder.createdAt)
-            guard let data = CryptoHelper.decryptPasswordData(encrypted, salt: salt, aad: aad) else {
-                return nil
-            }
-            return SecData(data)
+        guard let _ = CryptoHelper.keyStorage else { return nil }
+        guard let encrypted = folder.encryptedName,
+                let salt = folder.salt,
+                let id = folder.id else { return nil }
+        let aad = aadForEntry(id: id, createdAt: folder.createdAt)
+        guard let data = CryptoHelper.decryptPasswordData(encrypted, salt: salt, aad: aad) else {
+            return nil
         }
+        return SecData(data)
+    }
         
         /// Only use for display purposes
-        static func decryptedFolderNameString(_ folder: Folder) -> String? {
-            guard let secData = decryptedFolderName(folder) else { return nil }
-            defer { secData.clear() }
-            return secData.withUnsafeBytes { ptr in
-                guard let baseAddress = ptr.baseAddress else { return nil }
-                let data = Data(bytes: baseAddress, count: ptr.count)
-                return String(data: data, encoding: .utf8)
-            }
+    static func decryptedFolderNameString(_ folder: Folder) -> String? {
+        guard let secData = decryptedFolderName(folder) else { return nil }
+        defer { secData.clear() }
+        return secData.withUnsafeBytes { ptr in
+            guard let baseAddress = ptr.baseAddress else { return nil }
+            let data = Data(bytes: baseAddress, count: ptr.count)
+            return String(data: data, encoding: .utf8)
         }
-    
-    
+    }
     
     static func fetchFolders(context: NSManagedObjectContext) -> [Folder] {
         let request: NSFetchRequest<Folder> = Folder.fetchRequest()

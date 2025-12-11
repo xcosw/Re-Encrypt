@@ -5,11 +5,6 @@
 //  Created by xcosw.dev on 10.12.2025.
 //
 
-//
-//  CryptoHelper.swift
-//  re-Encrypt
-//
-
 import AppKit
 import CryptoKit
 import CommonCrypto
