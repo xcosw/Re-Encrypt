@@ -39,24 +39,22 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Xcosw/BiometricManager.swift,
-				Xcosw/CryproHelper.swift,
 				Xcosw/SecData.swift,
 				Xcosw/SecureClipboard.swift,
 				Xcosw/SecurePasswordStorage.swift,
+				Xcosw/xCore.swift,
 			);
-			platformFiltersByRelativePath = {
-				Xcosw/CryproHelper.swift = (macos, );
-			};
 			target = 2A02FDBA2E548FA10011A20E /* reEncrypt */;
 		};
 		1758B03E2ED9A8C1002BDFA7 /* Exceptions for "core" folder in "core" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Xcosw/BiometricManager.swift,
-				Xcosw/CryproHelper.swift,
+				Xcosw/CryproHelper.swift.bak,
 				Xcosw/SecData.swift,
 				Xcosw/SecureClipboard.swift,
 				Xcosw/SecurePasswordStorage.swift,
+				Xcosw/xCore.swift,
 			);
 			target = 1753D95A2ECB8AD3008D4731 /* core */;
 		};
@@ -78,6 +76,16 @@
 				"Views/Settings/PreferenceStore /LayoutPreferenceStore.swift.bak",
 			);
 		};
+		17A71B902EEA17B700A230C7 /* Exceptions for "core" folder in "Compile Sources" phase from "reEncrypt" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = 2A02FDB72E548FA10011A20E /* Sources */;
+			membershipExceptions = (
+				Xcosw/CryproHelper.swift.bak,
+			);
+			platformFiltersByRelativePath = {
+				Xcosw/CryproHelper.swift.bak = (macos, );
+			};
+		};
 /* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -90,6 +98,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				1758B03D2ED9A8C1002BDFA7 /* Exceptions for "core" folder in "reEncrypt" target */,
+				17A71B902EEA17B700A230C7 /* Exceptions for "core" folder in "Compile Sources" phase from "reEncrypt" target */,
 				1758B03E2ED9A8C1002BDFA7 /* Exceptions for "core" folder in "core" target */,
 			);
 			path = core;
