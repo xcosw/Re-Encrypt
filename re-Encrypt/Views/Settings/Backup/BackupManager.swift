@@ -761,7 +761,7 @@ struct BackupManager {
             throw BackupError.masterPasswordIncorrect
         }
         
-        guard CryptoHelper.isUnlocked else {
+        guard await CryptoHelper.isUnlocked else {
             throw BackupError.notUnlocked
         }
         
@@ -796,7 +796,7 @@ struct BackupManager {
             
             // Handle password encryption
             if decryptBeforeExport || exportPassword != nil {
-                guard let secData = CoreDataHelper.decryptedPassword(for: entry) else {
+                guard let secData = await CoreDataHelper.decryptedPassword(for: entry) else {
                     throw BackupError.exportFailed("Failed to decrypt entry: \(serviceName)")
                 }
                 defer { secData.clear() }
@@ -841,7 +841,7 @@ struct BackupManager {
                 
                 if decryptBeforeExport || exportPassword != nil {
                     // Decrypt TOTP secret
-                    if let secData = entry.getDecryptedTOTPSecret() {
+                    if let secData = await entry.getDecryptedTOTPSecret() {
                         defer { secData.clear() }
                         
                         // Convert SecData to String
@@ -919,7 +919,7 @@ struct BackupManager {
             var finalSalt = salt
             
             if decryptBeforeExport || exportPassword != nil {
-                guard let plainName = CoreDataHelper.decryptedFolderNameString(folder) else {
+                guard let plainName = await CoreDataHelper.decryptedFolderNameString(folder) else {
                     throw BackupError.exportFailed("Failed to decrypt folder name")
                 }
                 
@@ -1016,7 +1016,7 @@ struct BackupManager {
             throw BackupError.masterPasswordIncorrect
         }
         
-        guard CryptoHelper.isUnlocked else {
+        guard await CryptoHelper.isUnlocked else {
             throw BackupError.notUnlocked
         }
         
@@ -1086,7 +1086,7 @@ struct BackupManager {
                 let newSalt = newRandomSalt()
                 let aad = coreDataAAD(for: backupFolder.id, createdAt: folder.createdAt)
                 
-                guard let encrypted = CryptoHelper.encryptPasswordFolde(plainName, salt: newSalt, aad: aad) else {
+                guard let encrypted = await CryptoHelper.encryptPasswordFolde(plainName, salt: newSalt, aad: aad) else {
                     throw BackupError.importFailed("Failed to encrypt folder: \(plainName)")
                 }
                 
@@ -1106,7 +1106,7 @@ struct BackupManager {
                     let newSalt = newRandomSalt()
                     let aad = coreDataAAD(for: backupFolder.id, createdAt: folder.createdAt)
                     
-                    guard let reencrypted = CryptoHelper.encryptPasswordFolde(plainName, salt: newSalt, aad: aad) else {
+                    guard let reencrypted = await CryptoHelper.encryptPasswordFolde(plainName, salt: newSalt, aad: aad) else {
                         throw BackupError.importFailed("Failed to re-encrypt folder")
                     }
                     
@@ -1162,7 +1162,7 @@ struct BackupManager {
                 let newSalt = newRandomSalt()
                 let aad = coreDataAAD(for: backupEntry.id, createdAt: entry.createdAt)
                 
-                guard let encrypted = CryptoHelper.encryptPasswordFolde(plainPassword, salt: newSalt, aad: aad) else {
+                guard let encrypted = await CryptoHelper.encryptPasswordFolde(plainPassword, salt: newSalt, aad: aad) else {
                     NSLog("❌ Failed to encrypt entry: \(backupEntry.serviceName)")
                     continue
                 }
@@ -1183,7 +1183,7 @@ struct BackupManager {
                     let newSalt = newRandomSalt()
                     let aad = coreDataAAD(for: backupEntry.id, createdAt: entry.createdAt)
                     
-                    guard let reencrypted = CryptoHelper.encryptPasswordFolde(plainPassword, salt: newSalt, aad: aad) else {
+                    guard let reencrypted = await CryptoHelper.encryptPasswordFolde(plainPassword, salt: newSalt, aad: aad) else {
                         NSLog("❌ Failed to re-encrypt entry: \(backupEntry.serviceName)")
                         continue
                     }
@@ -1213,7 +1213,7 @@ struct BackupManager {
                         let aad = coreDataAAD(for: backupEntry.id, createdAt: entry.createdAt, suffix: "-totp")
                         let totpData = Data(plainTOTP.utf8)
                         
-                        if let encrypted = CryptoHelper.encryptPasswordData(totpData, salt: newTOTPSalt, aad: aad) {
+                        if let encrypted = await CryptoHelper.encryptPasswordData(totpData, salt: newTOTPSalt, aad: aad) {
                             entry.encryptedTOTPSecret = encrypted
                             entry.totpSalt = newTOTPSalt
                             with2FACount += 1
@@ -1234,7 +1234,7 @@ struct BackupManager {
                         let aad = coreDataAAD(for: backupEntry.id, createdAt: entry.createdAt, suffix: "-totp")
                         let totpData = Data(plainTOTP.utf8)
                         
-                        if let reencrypted = CryptoHelper.encryptPasswordData(totpData, salt: newTOTPSalt, aad: aad) {
+                        if let reencrypted = await CryptoHelper.encryptPasswordData(totpData, salt: newTOTPSalt, aad: aad) {
                             entry.encryptedTOTPSecret = reencrypted
                             entry.totpSalt = newTOTPSalt
                             with2FACount += 1

@@ -130,8 +130,9 @@ struct AddTOTPSecretView: View {
             Spacer()
             
             Button("Save Secret") {
-                saveSecret()
-            }
+                Task{
+                    await saveSecret()
+            } }
             .buttonStyle(.borderedProminent)
             .tint(theme.badgeBackground)
             .disabled(manualSecret.count < 16)
@@ -156,13 +157,13 @@ struct AddTOTPSecretView: View {
     
     // MARK: - Save TOTP Secret
     
-    private func saveSecret() {
+    private func saveSecret() async {
         guard manualSecret.count >= 16 else {
             errorMessage = "Secret key is too short (minimum 16 characters)"
             return
         }
         
-        let success = entry.setEncryptedTOTPSecret(manualSecret, context: viewContext)
+        let success = await entry.setEncryptedTOTPSecret(manualSecret, context: viewContext)
         
         if success {
             dismiss()

@@ -17,15 +17,15 @@ public struct AppInitializationHelper {
         print("✅ App initialization complete")
     }
     
-    public static func initializeSecureSettings() {
+    public static func initializeSecureSettings() async {
         print("🔐 Loading secure settings after unlock...")
         
         // Reload security config
-        SecurityConfigManager.shared.reload()
+        await SecurityConfigManager.shared.reload()
         
         // Load monitoring settings AFTER vault is unlocked
-        MemoryPressureMonitor.shared.loadSettings()
-        ScreenshotDetectionManager.shared.loadSettings()
+        await MemoryPressureMonitor.shared.loadSettings()
+        await ScreenshotDetectionManager.shared.loadSettings()
         
         print("✅ Secure settings and monitors loaded")
     }

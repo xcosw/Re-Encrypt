@@ -53,15 +53,14 @@ class TwoFactorAuthManager {
     }
     
     /// Enable 2FA with the provided secret
-    func enable(secret: String, backupCodes: [String], masterPassword: Data) -> Bool {
-        guard CryptoHelper.keyStorage != nil else {
-            return false
-        }
+    func enable(secret: String, backupCodes: [String], masterPassword: Data) async -> Bool {
+        guard await CryptoHelper.validateSecurityEnvironment() else { return false }
+        guard await SecureKeyStorage.shared.hasKey() else { return false }
         
         // Encrypt secret using master password
         let secretData = Data(secret.utf8)
         let salt = generateSalt()
-        guard let encryptedSecret = CryptoHelper.encryptPasswordData(secretData, salt: salt, aad: aadFor2FA()) else {
+        guard let encryptedSecret = await CryptoHelper.encryptPasswordData(secretData, salt: salt, aad: aadFor2FA()) else {
             return false
         }
         
@@ -72,7 +71,7 @@ class TwoFactorAuthManager {
         // Encrypt backup codes
         let codesData = Data(backupCodes.joined(separator: ",").utf8)
         let codesSalt = generateSalt()
-        guard let encryptedCodes = CryptoHelper.encryptPasswordData(codesData, salt: codesSalt, aad: aadFor2FA()) else {
+        guard let encryptedCodes = await CryptoHelper.encryptPasswordData(codesData, salt: codesSalt, aad: aadFor2FA()) else {
             return false
         }
         
@@ -82,7 +81,7 @@ class TwoFactorAuthManager {
         // Store enabled flag (just a marker, encrypted empty data)
         let enabledData = Data("enabled".utf8)
         let enabledSalt = generateSalt()
-        guard let encryptedEnabled = CryptoHelper.encryptPasswordData(enabledData, salt: enabledSalt, aad: aadFor2FA()) else {
+        guard let encryptedEnabled = await CryptoHelper.encryptPasswordData(enabledData, salt: enabledSalt, aad: aadFor2FA()) else {
             return false
         }
         
@@ -112,20 +111,20 @@ class TwoFactorAuthManager {
     // MARK: - Verification
     
     /// Verify a TOTP code
-    func verify(code: String, masterPassword: Data) -> Bool {
+    func verify(code: String, masterPassword: Data) async -> Bool {
         guard isEnabled else { return true } // 2FA not enabled, always pass
         
         // Try TOTP verification
-        if verifyTOTP(code: code, masterPassword: masterPassword) {
+        if await verifyTOTP(code: code, masterPassword: masterPassword) {
             return true
         }
         
         // Try backup code verification
-        return verifyBackupCode(code: code, masterPassword: masterPassword)
+        return await verifyBackupCode(code: code, masterPassword: masterPassword)
     }
     
-    private func verifyTOTP(code: String, masterPassword: Data) -> Bool {
-        guard let secret = getDecryptedSecret(masterPassword: masterPassword) else {
+    private func verifyTOTP(code: String, masterPassword: Data) async -> Bool {
+        guard let secret = await getDecryptedSecret(masterPassword: masterPassword) else {
             return false
         }
         
@@ -144,8 +143,8 @@ class TwoFactorAuthManager {
         return false
     }
     
-    private func verifyBackupCode(code: String, masterPassword: Data) -> Bool {
-        guard var backupCodes = getDecryptedBackupCodes(masterPassword: masterPassword) else {
+    private func verifyBackupCode(code: String, masterPassword: Data) async -> Bool {
+        guard var backupCodes = await getDecryptedBackupCodes(masterPassword: masterPassword) else {
             return false
         }
         
@@ -160,7 +159,7 @@ class TwoFactorAuthManager {
         // Re-encrypt and save remaining codes
         let codesData = Data(backupCodes.joined(separator: ",").utf8)
         let salt = generateSalt()
-        guard let encrypted = CryptoHelper.encryptPasswordData(codesData, salt: salt, aad: aadFor2FA()) else {
+        guard let encrypted = await CryptoHelper.encryptPasswordData(codesData, salt: salt, aad: aadFor2FA()) else {
             return false
         }
         
@@ -172,20 +171,19 @@ class TwoFactorAuthManager {
     
     // MARK: - Backup Codes Management
     
-    func getRemainingBackupCodes(masterPassword: Data) -> [String]? {
-        return getDecryptedBackupCodes(masterPassword: masterPassword)
+    func getRemainingBackupCodes(masterPassword: Data) async -> [String]? {
+        return await getDecryptedBackupCodes(masterPassword: masterPassword)
     }
     
-    func regenerateBackupCodes(masterPassword: Data) -> [String]? {
-        guard CryptoHelper.keyStorage != nil else {
-            return nil
-        }
+    func regenerateBackupCodes(masterPassword: Data) async -> [String]? {
+        guard await CryptoHelper.validateSecurityEnvironment() else { return nil }
+        guard await SecureKeyStorage.shared.hasKey() else { return nil }
         
         let newCodes = generateBackupCodes(count: 10)
         let codesData = Data(newCodes.joined(separator: ",").utf8)
         let salt = generateSalt()
         
-        guard let encrypted = CryptoHelper.encryptPasswordData(codesData, salt: salt, aad: aadFor2FA()) else {
+        guard let encrypted = await CryptoHelper.encryptPasswordData(codesData, salt: salt, aad: aadFor2FA()) else {
             return nil
         }
         
@@ -228,7 +226,7 @@ class TwoFactorAuthManager {
     
     // MARK: - Encrypted Storage Helpers
     
-    private func getDecryptedSecret(masterPassword: Data) -> String? {
+    private func getDecryptedSecret(masterPassword: Data) async -> String? {
         guard let combined = loadEncryptedFromKeychain(key: secretKey),
               combined.count > 32 else {
             return nil
@@ -237,14 +235,14 @@ class TwoFactorAuthManager {
         let salt = combined.prefix(32)
         let encrypted = combined.dropFirst(32)
         
-        guard let decrypted = CryptoHelper.decryptPasswordData(encrypted, salt: salt, aad: aadFor2FA()) else {
+        guard let decrypted = await CryptoHelper.decryptPasswordData(encrypted, salt: salt, aad: aadFor2FA()) else {
             return nil
         }
         
         return String(data: decrypted, encoding: .utf8)
     }
     
-    private func getDecryptedBackupCodes(masterPassword: Data) -> [String]? {
+    private func getDecryptedBackupCodes(masterPassword: Data) async -> [String]? {
         guard let combined = loadEncryptedFromKeychain(key: backupCodesKey),
               combined.count > 32 else {
             return nil
@@ -253,7 +251,7 @@ class TwoFactorAuthManager {
         let salt = combined.prefix(32)
         let encrypted = combined.dropFirst(32)
         
-        guard let decrypted = CryptoHelper.decryptPasswordData(encrypted, salt: salt, aad: aadFor2FA()),
+        guard let decrypted = await CryptoHelper.decryptPasswordData(encrypted, salt: salt, aad: aadFor2FA()),
               let codesString = String(data: decrypted, encoding: .utf8) else {
             return nil
         }

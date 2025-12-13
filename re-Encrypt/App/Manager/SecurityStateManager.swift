@@ -62,7 +62,7 @@ final class SecurityStateManager: ObservableObject {
                 guard let self = self else { return }
 
                 let timeout = CryptoHelper.sessionTimeout
-                let elapsed = CryptoHelper.getSessionElapsed()   // now allowed on MainActor
+                let elapsed = await CryptoHelper.getSessionElapsed()   // now allowed on MainActor
                 self.sessionRemainingTime = max(0, timeout - elapsed)
 
                 if self.sessionRemainingTime <= 0 {

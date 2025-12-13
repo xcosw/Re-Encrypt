@@ -153,13 +153,13 @@ final class UnifiedIdleController: ObservableObject {
     // =============================================================
     
     /// Start unified idle monitoring
-    func start() {
+    func start() async {
         // Get settings
-        let lockEnabled = CryptoHelper.getAutoLockEnabled()
-        let lockInterval = lockEnabled ? CryptoHelper.getAutoLockInterval() : nil
+        let lockEnabled = await CryptoHelper.getAutoLockEnabled()
+        let lockInterval = await lockEnabled ? CryptoHelper.getAutoLockInterval() : nil
         
-        let closeEnabled = CryptoHelper.getAutoCloseEnabled()
-        let closeInterval = closeEnabled ? (CryptoHelper.getAutoCloseInterval() * 60) : nil
+        let closeEnabled = await CryptoHelper.getAutoCloseEnabled()
+        let closeInterval = await closeEnabled ? (CryptoHelper.getAutoCloseInterval() * 60) : nil
         // Nothing enabled?
         guard lockInterval != nil || closeInterval != nil else {
             stop()

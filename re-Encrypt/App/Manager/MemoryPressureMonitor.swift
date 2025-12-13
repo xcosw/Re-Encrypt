@@ -16,17 +16,21 @@ final class MemoryPressureMonitor: ObservableObject {
     @Published var isEnabled = true {
         didSet {
             if isEnabled != oldValue {
+                Task {
+                    await
                 CryptoHelper.setMemoryPressureMonitoringEnabled(isEnabled)
                 applySettings()
-            }
+            } }
         }
     }
     
     @Published var autoLockOnPressure = true {
         didSet {
             if autoLockOnPressure != oldValue {
+                Task {
+                    await
                 CryptoHelper.setMemoryPressureAutoLock(autoLockOnPressure)
-            }
+            }}
         }
     }
     
@@ -44,20 +48,20 @@ final class MemoryPressureMonitor: ObservableObject {
         )
     }
     
-    func loadSettings() {
+    func loadSettings() async {
         // Only load if vault is unlocked
-        guard CryptoHelper.isUnlocked else {
+        guard await CryptoHelper.isUnlocked else {
             print("⚠️ Vault locked - using default memory monitoring settings")
             return
         }
         
-        isEnabled = CryptoHelper.getMemoryPressureMonitoringEnabled()
-        autoLockOnPressure = CryptoHelper.getMemoryPressureAutoLock()
+        isEnabled = await CryptoHelper.getMemoryPressureMonitoringEnabled()
+        autoLockOnPressure = await CryptoHelper.getMemoryPressureAutoLock()
         print("📋 Memory monitoring loaded: enabled=\(isEnabled), autoLock=\(autoLockOnPressure)")
     }
     
-    @objc private func reloadSettings() {
-        loadSettings()
+    @objc private func reloadSettings() async {
+        await loadSettings()
         applySettings()
     }
     
@@ -117,7 +121,7 @@ final class MemoryPressureMonitor: ObservableObject {
         await SecureClipboard.shared.clearClipboard()
         
         if autoLockOnPressure {
-            CryptoHelper.clearKeys()
+            await CryptoHelper.clearKeys()
             NotificationCenter.default.post(name: .sessionExpired, object: nil)
         }
         

@@ -17,8 +17,10 @@ final class ScreenshotDetectionManager: ObservableObject {
     @Published var isEnabled = true {
         didSet {
             if isEnabled != oldValue {
-                CryptoHelper.setScreenshotDetectionEnabled(isEnabled)
+                Task{
+                    await CryptoHelper.setScreenshotDetectionEnabled(isEnabled)
                 applySettings()
+                }
             }
         }
     }
@@ -26,7 +28,8 @@ final class ScreenshotDetectionManager: ObservableObject {
     @Published var notificationsEnabled = true {
         didSet {
             if notificationsEnabled != oldValue {
-                CryptoHelper.setScreenshotNotificationsEnabled(notificationsEnabled)
+                Task{
+                    await CryptoHelper.setScreenshotNotificationsEnabled(notificationsEnabled) }
             }
         }
     }
@@ -47,20 +50,20 @@ final class ScreenshotDetectionManager: ObservableObject {
         )
     }
     
-    func loadSettings() {
+    func loadSettings() async {
         // Only load if vault is unlocked
-        guard CryptoHelper.isUnlocked else {
+        guard await CryptoHelper.isUnlocked else {
             print("⚠️ Vault locked - using default screenshot detection settings")
             return
         }
         
-        isEnabled = CryptoHelper.getScreenshotDetectionEnabled()
-        notificationsEnabled = CryptoHelper.getScreenshotNotificationsEnabled()
+        isEnabled = await CryptoHelper.getScreenshotDetectionEnabled()
+        notificationsEnabled = await CryptoHelper.getScreenshotNotificationsEnabled()
         print("📋 Screenshot detection loaded: enabled=\(isEnabled), notifications=\(notificationsEnabled)")
     }
     
-    @objc private func reloadSettings() {
-        loadSettings()
+    @objc private func reloadSettings() async {
+        await loadSettings()
         applySettings()
     }
     

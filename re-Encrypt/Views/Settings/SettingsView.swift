@@ -25,6 +25,7 @@ extension Notification.Name {
     // MARK: - Screenshot Detection
     static let screenshotSettingsChanged = Notification.Name("screenshotSettingsChanged")
     static let screenshotDetected = Notification.Name("screenshotDetected")
+    static let emergencyShutdown = Notification.Name("EmergencyShutdown")
     
     //static let deviceBindingChanged = Notification.Name("deviceBindingChanged")
 }
@@ -77,30 +78,39 @@ class SecurityConfigManager: ObservableObject {
     static let shared = SecurityConfigManager()
     
     @Published var sessionTimeout: TimeInterval {
-        didSet { CryptoHelper.setSessionTimeout(sessionTimeout) }
+        didSet {
+            Task { await CryptoHelper.setSessionTimeout(sessionTimeout) }
+        }
     }
     
     @Published var autoLockOnBackground: Bool {
         didSet {
-            print("🔧 [SecurityConfig] autoLockOnBackground changed to: \(autoLockOnBackground)")
-            CryptoHelper.setAutoLockOnBackground(autoLockOnBackground)
-            
-            // ✅ Verify it was saved
-            let verified = CryptoHelper.getAutoLockOnBackground()
-            print("✅ [SecurityConfig] Verified saved value: \(verified)")
+            Task {
+                print("🔧 [SecurityConfig] autoLockOnBackground changed to: \(autoLockOnBackground)")
+                await CryptoHelper.setAutoLockOnBackground(autoLockOnBackground)
+                
+                let verified = await CryptoHelper.getAutoLockOnBackground()
+                print("✅ [SecurityConfig] Verified saved value: \(verified)")
+            }
         }
     }
     
     private init() {
-        self.sessionTimeout = CryptoHelper.getSessionTimeout()
-        self.autoLockOnBackground = CryptoHelper.getAutoLockOnBackground()
+        // Provide default values; async values will be loaded in `reload()`
+        self.sessionTimeout = 0
+        self.autoLockOnBackground = false
+        
+        Task {
+            await self.reload()
+        }
     }
     
-    func reload() {
-        self.sessionTimeout = CryptoHelper.getSessionTimeout()
-        self.autoLockOnBackground = CryptoHelper.getAutoLockOnBackground()
+    func reload() async {
+        self.sessionTimeout = await CryptoHelper.getSessionTimeout()
+        self.autoLockOnBackground = await CryptoHelper.getAutoLockOnBackground()
     }
 }
+
 
 // MARK: - Settings View
 
@@ -136,7 +146,7 @@ struct SettingsView: View {
     @State private var showDeleteConfirm = false
     @State private var showingSessionDetails = false
     @StateObject private var configManager = SecurityConfigManager.shared
-    @State private var autoLockEnabled: Bool = CryptoHelper.getAutoLockEnabled()
+    @State private var autoLockEnabled: Bool = false 
 
 
     var body: some View {
@@ -167,7 +177,11 @@ struct SettingsView: View {
             Text("The master password entered is incorrect. Please try again.")
         }
         .alert("Delete All Data?", isPresented: $showDeleteConfirm) {
-            Button("Delete", role: .destructive, action: wipeAllAppData)
+            Button("Delete", role: .destructive) {
+                Task {
+                    await wipeAllAppData()
+                }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will permanently delete all app data including saved passwords and settings. This action cannot be undone.")
@@ -179,8 +193,8 @@ struct SettingsView: View {
         }
         .appBackground()
         .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                loadSecureSettings()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { Task{
+                await loadSecureSettings()}
             }
         }
     }
@@ -225,7 +239,7 @@ struct SettingsView: View {
             
             // Footer
             VStack(spacing: 12) {
-                SecurityStatusIndicator()
+                SecurityStatusPopoverButton()
                     .environmentObject(memoryMonitor)
                 
                 Button {
@@ -579,8 +593,9 @@ struct SettingsView: View {
                     .onChange(of: autoLockEnabled) { _, newValue in
                         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                         print("[Settings] Auto-lock enabled: \(newValue)")
-                        CryptoHelper.setAutoLockEnabled(newValue)
-                        
+                        Task {
+                            await CryptoHelper.setAutoLockEnabled(newValue)
+                        }
                         // 🌟 Notify unified controller to restart
                         NotificationCenter.default.post(
                             name: .autoLockSettingsChanged,
@@ -604,8 +619,9 @@ struct SettingsView: View {
                             Slider(value: $autoLockInterval, in: 30...3600, step: 30)
                                 .onChange(of: autoLockInterval) { _, newValue in
                                     print("[Settings] Auto-lock interval: \(Int(newValue))s")
-                                    CryptoHelper.setAutoLockInterval(Int(newValue))
-                                    
+                                    Task{
+                                        await CryptoHelper.setAutoLockInterval(Int(newValue))
+                                }
                                     // 🌟 Notify unified controller
                                     NotificationCenter.default.post(
                                         name: .autoLockSettingsChanged,
@@ -684,8 +700,9 @@ struct SettingsView: View {
                     .onChange(of: autoCloseEnabled) { _, newValue in
                         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                         print("[Settings] Auto-close enabled: \(newValue)")
-                        CryptoHelper.setAutoCloseEnabled(newValue)
-                        
+                        Task{
+                            await CryptoHelper.setAutoCloseEnabled(newValue)
+                        }
                         // 🌟 Notify unified controller to restart
                         NotificationCenter.default.post(
                             name: .autoLockSettingsChanged,
@@ -709,7 +726,8 @@ struct SettingsView: View {
                             Slider(value: $autoCloseInterval, in: 1...120, step: 1)
                                 .onChange(of: autoCloseInterval) { _, newValue in
                                     print("[Settings] Auto-close interval: \(Int(newValue)) min")
-                                    CryptoHelper.setAutoCloseInterval(Int(newValue))
+                                    Task{
+                                        await CryptoHelper.setAutoCloseInterval(Int(newValue)) }
                                     
                                     // 🌟 Notify unified controller
                                     NotificationCenter.default.post(
@@ -921,7 +939,9 @@ struct SettingsView: View {
                         title: "Force Lock Now",
                         destructive: true,
                         action: {
-                            CryptoHelper.clearKeys()
+                            Task{
+                                await CryptoHelper.clearKeys()
+                            }
                             NotificationCenter.default.post(name: .sessionExpired, object: nil)
                         }
                     )
@@ -1209,36 +1229,69 @@ struct SettingsView: View {
     // MARK: - Helper Functions
        
     
-    private func loadSecureSettings() {
-        autoLockEnabled = CryptoHelper.getAutoLockEnabled()
-        autoLockInterval = Double(CryptoHelper.getAutoLockInterval())
+    private func loadSecureSettings() async {
+        autoLockEnabled = await CryptoHelper.getAutoLockEnabled()
+        autoLockInterval = await Double(CryptoHelper.getAutoLockInterval())
        // autoClearClipboard = CryptoHelper.getAutoClearClipboard()
-        clearDelay = Int(CryptoHelper.getClearDelay())
-        autoCloseEnabled = CryptoHelper.getAutoCloseEnabled()
-        autoCloseInterval = Double(CryptoHelper.getAutoCloseInterval())
+        clearDelay = await Int(CryptoHelper.getClearDelay())
+        autoCloseEnabled = await CryptoHelper.getAutoCloseEnabled()
+        autoCloseInterval = await Double(CryptoHelper.getAutoCloseInterval())
     }
        
-    private func wipeAllAppData() {
-        //CryptoHelper.clearStorage
-        CryptoHelper.clearKeys()
-        CryptoHelper.wipeAllData(context: viewContext)
-        CryptoHelper.wipeAllSecureSettings()
+    private func wipeAllAppData() async {
+        // 1️⃣ Clear in-memory keys
+        await CryptoHelper.clearKeys()
         
+        // 2️⃣ Wipe all persistent data
+        await CryptoHelper.wipeAllData(context: viewContext)
+         CryptoHelper.wipeAllSecureSettings()
+        
+        // 3️⃣ Remove deprecated UserDefaults keys
         let keysToRemove = [
             "CryptoHelper.StorageBackend.v2",
             "CryptoHelper.failedAttempts.v2"
         ]
         keysToRemove.forEach { UserDefaults.standard.removeObject(forKey: $0) }
         
-        let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        if let folder = appSupportURL?.appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.xcosw.Password-Manager") {
+        // 4️⃣ Delete app support folder
+        if let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+           let bundleID = Bundle.main.bundleIdentifier {
+            let folder = appSupportURL.appendingPathComponent(bundleID)
             try? FileManager.default.removeItem(at: folder)
         }
         
-        
-        NotificationCenter.default.post(name: .appResetRequired, object: nil)
+        // 5️⃣ Notify observers
+        await MainActor.run {
+            NotificationCenter.default.post(name: .appResetRequired, object: nil)
+        }
+    }
+
+}
+@available(macOS 15.0, *)
+extension CryptoHelper {
+    static func wipeAllData(context: NSManagedObjectContext) async {
+        await clearKeys()
+        await MainActor.run {
+            clearCurrentStorage()
+            wipeAllSecureSettings()
+            
+            // Clear Core Data
+            let requestPasswords: NSFetchRequest<NSFetchRequestResult> = NSFetchRequest(entityName: "PasswordEntry")
+            let requestFolders: NSFetchRequest<NSFetchRequestResult> = NSFetchRequest(entityName: "Folder")
+            let deletePasswords = NSBatchDeleteRequest(fetchRequest: requestPasswords)
+            let deleteFolders = NSBatchDeleteRequest(fetchRequest: requestFolders)
+            
+            do {
+                try context.execute(deletePasswords)
+                try context.execute(deleteFolders)
+                try context.save()
+            } catch {
+                context.rollback()
+            }
+        }
     }
 }
+
 
 // MARK: - Sidebar Button Component
 
@@ -1606,7 +1659,9 @@ struct SessionDetailsView: View {
                     SettingsCard {
                         VStack(spacing: 12) {
                             Button {
-                                loadSessionInfo()
+                                Task{
+                                    await loadSessionInfo()
+                                }
                             } label: {
                                 Label("Refresh Session Info", systemImage: "arrow.clockwise")
                                     .frame(maxWidth: .infinity)
@@ -1630,14 +1685,16 @@ struct SessionDetailsView: View {
         }
         .frame(width: 500, height: 400)
         .onAppear {
-            loadSessionInfo()
+            Task{
+                await loadSessionInfo()
+            }
         }
     }
     
-    private func loadSessionInfo() {
-        sessionInfo = [
+    private func loadSessionInfo() async {
+        sessionInfo = await [
             "Status": CryptoHelper.isUnlocked ? "Unlocked" : "Locked",
-            "Failed Attempts": "\(CryptoHelper.failedAttempts)",
+            "Failed Attempts": "\(await CryptoHelper.failedAttempts)",
             "Has Master Password": CryptoHelper.hasMasterPassword ? "Yes" : "No",
             "Session Start": Date().formatted(.dateTime)
         ]

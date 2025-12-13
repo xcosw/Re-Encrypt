@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		178D04642EEB6E11009E43B3 /* core.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 17808AFC2ED86CCF00E26F3E /* core.framework */; };
+		178D04652EEB6E11009E43B3 /* core.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 17808AFC2ED86CCF00E26F3E /* core.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		1753D9612ECB8AD3008D4731 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -17,12 +22,23 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		173097D42EEDFA7500EDEEDD /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CC47835F2EAAA37700522596 /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				178D04652EEB6E11009E43B3 /* core.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -30,6 +46,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		173097C32EEDFA7500EDEEDD /* AuthenticationServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AuthenticationServices.framework; path = System/Library/Frameworks/AuthenticationServices.framework; sourceTree = SDKROOT; };
 		17808AFC2ED86CCF00E26F3E /* core.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = core.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		17EAB81C2ED71BD500F2265D /* reEncrypt.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = reEncrypt.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -39,24 +56,54 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Xcosw/BiometricManager.swift,
+				Xcosw/CryproHelper.swift,
+				Xcosw/Manager/AntiDebugMonitor.swift,
+				Xcosw/Manager/AuditLogger.swift,
+				Xcosw/Manager/AuthenticationManager.swift,
+				Xcosw/Manager/DeadManSwitch.swift,
+				Xcosw/Manager/IntegrityVerifier.swift,
+				Xcosw/Manager/MemoryProtector.swift,
+				Xcosw/Manager/RateLimiter.swift,
+				Xcosw/Manager/RecoveryCodeManager.swift,
+				Xcosw/Manager/SecureKeyStorage.swift,
+				Xcosw/Manager/SessionManager.swift,
 				Xcosw/SecData.swift,
 				Xcosw/SecureClipboard.swift,
 				Xcosw/SecurePasswordStorage.swift,
-				Xcosw/xCore.swift,
 			);
+			platformFiltersByRelativePath = {
+				Xcosw/CryproHelper.swift = (macos, );
+			};
 			target = 2A02FDBA2E548FA10011A20E /* reEncrypt */;
 		};
 		1758B03E2ED9A8C1002BDFA7 /* Exceptions for "core" folder in "core" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Xcosw/BiometricManager.swift,
-				Xcosw/CryproHelper.swift.bak,
+				Xcosw/CryproHelper.swift,
+				Xcosw/Manager/AntiDebugMonitor.swift,
+				Xcosw/Manager/AuditLogger.swift,
+				Xcosw/Manager/AuthenticationManager.swift,
+				Xcosw/Manager/DeadManSwitch.swift,
+				Xcosw/Manager/IntegrityVerifier.swift,
+				Xcosw/Manager/MemoryProtector.swift,
+				Xcosw/Manager/RateLimiter.swift,
+				Xcosw/Manager/RecoveryCodeManager.swift,
+				Xcosw/Manager/SecureKeyStorage.swift,
+				Xcosw/Manager/SessionManager.swift,
 				Xcosw/SecData.swift,
 				Xcosw/SecureClipboard.swift,
 				Xcosw/SecurePasswordStorage.swift,
-				Xcosw/xCore.swift,
 			);
 			target = 1753D95A2ECB8AD3008D4731 /* core */;
+		};
+		178D04552EEB6D0E009E43B3 /* Exceptions for "Config" folder in "reEncrypt" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				TeamID.public.xcconfig,
+				TeamID.xcconfig,
+			);
+			target = 2A02FDBA2E548FA10011A20E /* reEncrypt */;
 		};
 		17ACD27D2ECF5582003BE685 /* Exceptions for "re-Encrypt" folder in "reEncrypt" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -76,16 +123,6 @@
 				"Views/Settings/PreferenceStore /LayoutPreferenceStore.swift.bak",
 			);
 		};
-		17A71B902EEA17B700A230C7 /* Exceptions for "core" folder in "Compile Sources" phase from "reEncrypt" target */ = {
-			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
-			buildPhase = 2A02FDB72E548FA10011A20E /* Sources */;
-			membershipExceptions = (
-				Xcosw/CryproHelper.swift.bak,
-			);
-			platformFiltersByRelativePath = {
-				Xcosw/CryproHelper.swift.bak = (macos, );
-			};
-		};
 /* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -98,7 +135,6 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				1758B03D2ED9A8C1002BDFA7 /* Exceptions for "core" folder in "reEncrypt" target */,
-				17A71B902EEA17B700A230C7 /* Exceptions for "core" folder in "Compile Sources" phase from "reEncrypt" target */,
 				1758B03E2ED9A8C1002BDFA7 /* Exceptions for "core" folder in "core" target */,
 			);
 			path = core;
@@ -106,6 +142,9 @@
 		};
 		1783DB0D2EE75B7E009B3E7C /* Config */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				178D04552EEB6D0E009E43B3 /* Exceptions for "Config" folder in "reEncrypt" target */,
+			);
 			path = Config;
 			sourceTree = "<group>";
 		};
@@ -132,12 +171,21 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				178D04642EEB6E11009E43B3 /* core.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		178D045E2EEB6E08009E43B3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				173097C32EEDFA7500EDEEDD /* AuthenticationServices.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		2A02FDB22E548FA10011A20E = {
 			isa = PBXGroup;
 			children = (
@@ -147,6 +195,7 @@
 				1753D95C2ECB8AD3008D4731 /* core */,
 				17EAB81C2ED71BD500F2265D /* reEncrypt.app */,
 				17808AFC2ED86CCF00E26F3E /* core.framework */,
+				178D045E2EEB6E08009E43B3 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -194,6 +243,7 @@
 				2A02FDB82E548FA10011A20E /* Frameworks */,
 				2A02FDB92E548FA10011A20E /* Resources */,
 				CC47835F2EAAA37700522596 /* Embed Frameworks */,
+				173097D42EEDFA7500EDEEDD /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
@@ -561,7 +611,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "$(PROJECT_DIR)/re-Encrypt/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = MyVault;
+				INFOPLIST_KEY_CFBundleDisplayName = ReEncrypt;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = No;
@@ -628,7 +678,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "$(PROJECT_DIR)/re-Encrypt/Info.plist\n";
 				"INFOPLIST_FILE[sdk=macosx*]" = "";
-				INFOPLIST_KEY_CFBundleDisplayName = MyVault;
+				INFOPLIST_KEY_CFBundleDisplayName = ReEncrypt;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = No;

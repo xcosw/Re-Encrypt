@@ -110,11 +110,15 @@ struct PasswordQuickDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .appBackground()
         .onReceive(timer) { _ in
+            Task {
+                await
             updateTOTP()
-        }
+        }}
         .onAppear {
+            Task {
+                await
             updateTOTP()
-        }
+        }}
     }
     
     // MARK: - Brand Colors (same as your list view)
@@ -139,7 +143,7 @@ struct PasswordQuickDetailView: View {
     }
     
     // MARK: - TOTP Update Logic (uses your TOTPGenerator)
-    private func updateTOTP() {
+    private func updateTOTP() async {
         guard entry.hasTwoFactor else {
             currentTOTP = "------"
             timeRemaining = 0
@@ -147,7 +151,7 @@ struct PasswordQuickDetailView: View {
             return
         }
         
-        guard let secData = entry.getDecryptedTOTPSecret() else {
+        guard let secData = await entry.getDecryptedTOTPSecret() else {
             currentTOTP = "------"
             timeRemaining = 0
             progress = 0

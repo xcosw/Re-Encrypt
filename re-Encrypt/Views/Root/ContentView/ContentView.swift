@@ -117,8 +117,9 @@ struct ContentView: View {
                     .blur(radius: 0)
             } else if unlockToken.isExpired {
                 Color.clear.onAppear {
-                    handleTokenExpired()
-                }
+                    Task{
+                        await handleTokenExpired()
+                } }
             }
             
             // Local lock overlay
@@ -131,8 +132,10 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: isLocked)
         .onAppear {
-            setupInitialState()
-            loadSettings()
+            Task {
+                await setupInitialState()
+                await loadSettings()
+            }
         }
         .onDisappear {
             cleanup()
@@ -142,17 +145,25 @@ struct ContentView: View {
         }
 
         .onReceive(NotificationCenter.default.publisher(for: .appResetRequired)) { _ in
-            lockAppLocally(reason: .manual)
+            Task {
+                await
+                lockAppLocally(reason: .manual)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .applicationLocked)) { _ in
-            lockAppLocally(reason: .manual)
+            Task {
+                await
+                lockAppLocally(reason: .manual)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .sessionExpired)) { _ in
-            handleSessionExpired()
-        }
+            Task {
+          await  handleSessionExpired()
+        }}
         .onReceive(NotificationCenter.default.publisher(for: .memoryPressureDetected)) { _ in
-            handleMemoryPressure()
-        }
+            Task{
+           await handleMemoryPressure()
+        }}
         .appBackground()
     }
     
@@ -258,7 +269,7 @@ struct ContentView: View {
         }
         
         ToolbarItem(placement: .status) {
-            SecurityStatusIndicator()
+            SecurityStatusPopoverButton()
                 .environmentObject(memoryMonitor)
         }
     }
@@ -376,8 +387,10 @@ struct ContentView: View {
             existingEntry: sheet == .edit ? selectedPassword : nil,
             selectedFolder: currentSelectedFolder,
             onSave: { _ in
+                Task {
+                    await
                 sheet == .add ? savePassword() : updatePassword()
-            },
+            }},
             onCancel: {
                 activeSheet = nil
                 securePasswordStorage.clear()
@@ -399,7 +412,7 @@ struct ContentView: View {
         }
     }
     
-    private func savePassword() {
+    private func savePassword() async {
         guard validatePasswordForm() else { return }
         
         isLoading = true
@@ -410,7 +423,7 @@ struct ContentView: View {
             return
         }
         
-        CoreDataHelper.savePassword(
+        await CoreDataHelper.savePassword(
             serviceName: serviceName,
             username: username,
             lgdata: lgdata,
@@ -432,7 +445,7 @@ struct ContentView: View {
         isLoading = false
     }
     
-    private func updatePassword() {
+    private func updatePassword() async {
         guard validatePasswordForm(), let entry = selectedPassword else { return }
         
         guard let secureData = securePasswordStorage.get() else {
@@ -440,7 +453,7 @@ struct ContentView: View {
             return
         }
         
-        CoreDataHelper.upsertPassword(
+        await CoreDataHelper.upsertPassword(
             entry: entry,
             serviceName: serviceName,
             username: username,
@@ -469,7 +482,7 @@ struct ContentView: View {
         CoreDataHelper.deletePassword(entry, context: viewContext)
     }
     
-    private func editPassword(entry: PasswordEntry) {
+    private func editPassword(entry: PasswordEntry) async {
         selectedPassword = entry
         editingEntry = entry
         serviceName = entry.serviceName ?? ""
@@ -480,7 +493,7 @@ struct ContentView: View {
         category = entry.category ?? "Other"
         countryCode = entry.countryCode ?? ""
         
-        if let decryptedData = CoreDataHelper.decryptedPasswordData(for: entry) {
+        if let decryptedData = await CoreDataHelper.decryptedPasswordData(for: entry) {
             print("✅ Loaded password data: \(decryptedData.count) bytes")
             securePasswordStorage.set(decryptedData)
             passwordData = decryptedData
@@ -541,7 +554,10 @@ struct ContentView: View {
                         selectedFolder: currentSelectedFolder,
                         onSave: { updatedData in
                             passwordData = updatedData
+                            Task {
+                                await
                             savePassword()
+                            }
                             withAnimation {
                                 showInlineAddForm = false
                             }
@@ -573,11 +589,13 @@ struct ContentView: View {
                         selectedFolder: currentSelectedFolder,
                         onSave: { updatedData in
                             passwordData = updatedData
+                            Task {
+                                await
                             updatePassword()
                             withAnimation {
                                 showInlineEditForm = false
                                 editingEntry = nil
-                            }
+                            }}
                         },
                         onCancel: {
                             withAnimation {
@@ -602,9 +620,10 @@ struct ContentView: View {
                             ))
                     } else {
                         PasswordDetailsView(
+                            
                             selectedPassword: entry,
-                            decrypt: { CoreDataHelper.decryptedPassword(for: $0) },
-                            onEdit: { editPassword(entry: $0) },
+                            decrypt: { await CoreDataHelper.decryptedPassword(for: $0) },
+                            onEdit: { await editPassword(entry: $0) },
                             onDelete: deletePassword
                         )
                         .transition(.asymmetric(
@@ -675,7 +694,7 @@ private extension ContentView {
     
     // MARK: - Lock/Unlock
     
-    func lockAppLocally(reason: AppState.LockReason) {
+    func lockAppLocally(reason: AppState.LockReason) async {
         print("🔒 Locking app locally (reason: \(reason))")
         
         cleanup()
@@ -693,7 +712,7 @@ private extension ContentView {
             biometricAttemptedInLock = false
         }
         
-        CryptoHelper.clearKey()
+        await CryptoHelper.clearKey()
         
         print("✅ App is now locked with overlay, app remains running")
         
@@ -715,61 +734,56 @@ private extension ContentView {
             unlockError = "Please enter your master password"
             return
         }
-        
+
         isAttemptingUnlock = true
         defer {
             masterPasswordInput = ""
             securelyEraseMasterPassword()
             isAttemptingUnlock = false
         }
-        
+
         var passwordData = Data(masterPasswordInput.utf8)
         defer { passwordData.secureWipe() }
-        
+
         let success = await CryptoHelper.verifyMasterPassword(
             password: passwordData,
             context: viewContext
         )
-        
+
         if success {
             print("✅ App unlocked locally")
-            
-            // ✅ FIXED: Reset failed attempts on successful unlock
-            CryptoHelper.failedAttempts = 0
+
+            await AuthenticationManager.shared.resetAttempts()
             failedAttempts = 0
             lockoutTimeRemaining = 0
             lockoutTask?.cancel()
-            
-            withAnimation(.easeInOut(duration: 0.3)) {
+
+            withAnimation {
                 isLocked = false
                 unlockError = nil
                 biometricError = nil
             }
-            
+
         } else {
-            
-            CryptoHelper.failedAttempts += 1
-            failedAttempts = CryptoHelper.failedAttempts
-            
-            unlockError = "Incorrect password (Attempt \(failedAttempts)/\(CryptoHelper.maxAttempts))"
+            let shouldWipe = await AuthenticationManager.shared.recordFailedAttempt(context: viewContext)
+            failedAttempts = await AuthenticationManager.shared.getCurrentAttempts()
+
+            unlockError = "Incorrect password (Attempt \(failedAttempts)/\(AuthenticationManager.maxAttempts))"
             NSSound.beep()
-            
-            if failedAttempts >= CryptoHelper.maxAttempts {
-                // Max attempts reached
-                print("❌ Max attempts reached - requiring setup")
-                CryptoHelper.failedAttempts = 0
-                lockAppLocally(reason: .maxAttempts)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+
+            if shouldWipe {
+                await lockAppLocally(reason: .maxAttempts)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                     onRequireSetup()
                 }
             } else if failedAttempts >= 3 {
-                // Apply progressive lockout
                 applyLockout()
             }
         }
-        
+
         securePasswordStorage.clear()
     }
+
     
     // MARK: - Lock Overlay
     
@@ -1071,13 +1085,14 @@ private extension ContentView {
             
             if verified {
                 print("✅ App unlocked locally via biometric")
-                
-                // ✅ FIXED: Reset failed attempts on biometric success
-                CryptoHelper.failedAttempts = 0
+
+                // ✅ Correct: reset via AuthenticationManager actor
+                await AuthenticationManager.shared.resetAttempts()
+
                 failedAttempts = 0
                 lockoutTimeRemaining = 0
                 lockoutTask?.cancel()
-                
+
                 withAnimation(.easeInOut(duration: 0.3)) {
                     isLocked = false
                     unlockError = nil
@@ -1085,13 +1100,14 @@ private extension ContentView {
                     showBiometricPromptInLock = false
                     biometricAttemptedInLock = false
                 }
-                
+
             } else {
                 print("❌ Biometric succeeded but password verification failed")
                 biometricError = .fallback
                 unlockError = "Authentication failed. Please use your password."
                 NSSound.beep()
             }
+
             
             self.passwordData.secureWipe()
             
@@ -1138,19 +1154,19 @@ private extension ContentView {
     
 // MARK: - Event Handlers
      
-     func handleTokenExpired() {
+    func handleTokenExpired() async {
          print("🔒 Unlock token expired")
-         lockAppLocally(reason: .tokenExpired)
+        await lockAppLocally(reason: .tokenExpired)
      }
      
-     func handleSessionExpired() {
+    func handleSessionExpired() async {
          print("⏰ Session expired in ContentView")
-         lockAppLocally(reason: .sessionTimeout)
+        await lockAppLocally(reason: .sessionTimeout)
      }
      
-     func handleMemoryPressure() {
+    func handleMemoryPressure() async {
          print("⚠️ Memory pressure in ContentView")
-         lockAppLocally(reason: .memoryPressure)
+        await lockAppLocally(reason: .memoryPressure)
      }
      
      func handleAppResignActive() {
@@ -1160,14 +1176,14 @@ private extension ContentView {
              
              if shouldLock {
                  print("[ContentView] Locking app due to background setting")
-                 lockAppLocally(reason: .background)
+                 await lockAppLocally(reason: .background)
              }
          }
      }
      
      // MARK: - Setup & Cleanup
      
-    func setupInitialState() {
+    func setupInitialState() async {
         print("🚀 [ContentView] Setting up initial state")
         
         isLocked = false
@@ -1181,27 +1197,26 @@ private extension ContentView {
          
             
             // Then start auto-lock timer
-            let autoLockEnabled = CryptoHelper.getAutoLockEnabled()
+            let autoLockEnabled = await CryptoHelper.getAutoLockEnabled()
             print("📋 [ContentView] Auto-lock enabled: \(autoLockEnabled)")
             
         } else {
             print("❌ [ContentView] Token expired")
             currentToken = nil
-            lockAppLocally(reason: .tokenExpired)
+            await lockAppLocally(reason: .tokenExpired)
         }
     }
      
-     func loadSettings() {
-         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-             let autoLockEnabled = CryptoHelper.getAutoLockEnabled()
-             let autoLockInterval = CryptoHelper.getAutoLockInterval()
-             let sessionTimeout = CryptoHelper.getSessionTimeout()
-             
-             print("📋 Loaded settings:")
-             print("  - Auto-lock: \(autoLockEnabled), interval: \(autoLockInterval)s")
-             print("  - Session timeout: \(Int(sessionTimeout))s")
-         }
-     }
+    func loadSettings() async {
+        let autoLockEnabled = await CryptoHelper.getAutoLockEnabled()
+        let autoLockInterval = await CryptoHelper.getAutoLockInterval()
+        let sessionTimeout = await CryptoHelper.getSessionTimeout()
+
+        print("📋 Loaded settings:")
+        print("  - Auto-lock: \(autoLockEnabled), interval: \(autoLockInterval)s")
+        print("  - Session timeout: \(Int(sessionTimeout))s")
+    }
+
      
      func cleanup() {
          print("[ContentView] Performing cleanup")

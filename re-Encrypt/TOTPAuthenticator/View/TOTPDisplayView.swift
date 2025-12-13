@@ -84,7 +84,9 @@ struct TOTPDisplayView: View {
             )
         }
         .onAppear {
-            updateCode()
+            Task{
+                await updateCode()
+            }
             startTimer()
         }
         .onDisappear {
@@ -109,8 +111,8 @@ struct TOTPDisplayView: View {
     }
     
     @MainActor
-    private func updateCode() {
-        if let code = entry.generateTOTPCode() {
+    private func updateCode() async {
+        if let code = await entry.generateTOTPCode() {
             currentCode = code
         }
         remainingSeconds = TOTPGenerator.getRemainingSeconds()
@@ -121,7 +123,7 @@ struct TOTPDisplayView: View {
     private func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             Task { @MainActor in
-                updateCode()
+                await updateCode()
             }
         }
     }

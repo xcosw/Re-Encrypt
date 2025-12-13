@@ -52,6 +52,8 @@ struct AddPasswordForm: View {
     @State private var showAddTOTP = false
     @State private var showRemoveTOTP = false
     
+    @State private var resolvedFolderCategory: String? = nil
+    @State private var folderNameCache: [NSManagedObjectID: String] = [:]
     
     //CLIPBOARD
     @AppStorage("clearDelay") private var clearDelay: Int = 10
@@ -76,33 +78,34 @@ struct AddPasswordForm: View {
     }
     
     // MARK: - Smart Folder Category Detection
-    
-    private var folderCategory: String? {
+
+    private func resolveFolderCategory() async -> String? {
         guard let folder = selectedFolder else { return nil }
-        let folderName: String = {
-            guard let secData = CoreDataHelper.decryptedFolderName(folder) else { return "" }
-            defer { secData.clear() }
-            
-            let name = secData.withUnsafeBytes { ptr in
-                guard let base = ptr.baseAddress else { return "" }
-                let data = Data(bytes: base, count: ptr.count)
-                return String(data: data, encoding: .utf8) ?? ""
-            }
-            
-            return name.lowercased()
-        }()
-     // import categoryMapping
         
+        guard let secData = await CoreDataHelper.decryptedFolderName(folder) else {
+            return nil
+        }
+        defer { secData.clear() }
+        
+        let folderName = secData.withUnsafeBytes { ptr -> String in
+            guard let base = ptr.baseAddress else { return "" }
+            let data = Data(bytes: base, count: ptr.count)
+            return String(data: data, encoding: .utf8) ?? ""
+        }.lowercased()
+        
+        // Check exact match in categoryMapping
         if let exactMatch = categoryMapping[folderName] {
             return exactMatch
         }
         
+        // Check partial match in categoryMapping
         for (key, value) in categoryMapping {
             if folderName.contains(key) {
                 return value
             }
         }
         
+        // Check known categories
         let knownCategories = CategoryIcons.recommended + existingCategories
         if let matchedCategory = knownCategories.first(where: {
             $0.lowercased() == folderName
@@ -113,16 +116,17 @@ struct AddPasswordForm: View {
         return nil
     }
     
-    
+    // isWiFiEntry
     private var isWiFiEntry: Bool {
-        if let folderCat = folderCategory, folderCat == "Wi-Fi" { return true }
+        if let folderCat = resolvedFolderCategory, folderCat == "Wi-Fi" { return true }
         if category.lowercased().contains("wifi") || category.lowercased().contains("wi-fi") { return true }
         let s = serviceName.lowercased()
         return s.contains("ssid") || s.contains("wi-fi") || s.contains("wifi")
     }
-    
+
+    // shouldRestrictCategory
     private var shouldRestrictCategory: Bool {
-        return folderCategory != nil
+        return resolvedFolderCategory != nil
     }
 
 //MARK: - Custom list
@@ -149,19 +153,13 @@ struct AddPasswordForm: View {
                         .font(.title2.weight(.semibold))
                         .foregroundColor(theme.primaryTextColor)
                     
-                    // Show which folder this will be saved to
+                    // In the header section
                     if let folder = selectedFolder {
                         let folderName: String = {
-                            guard let secData = CoreDataHelper.decryptedFolderName(folder) else {
+                            guard let cached = folderNameCache[folder.objectID] else {
                                 return "Folder"
                             }
-                            defer { secData.clear() }
-                            
-                            return secData.withUnsafeBytes { ptr in
-                                guard let base = ptr.baseAddress else { return "Folder" }
-                                let data = Data(bytes: base, count: ptr.count)
-                                return String(data: data, encoding: .utf8) ?? "Folder"
-                            }
+                            return cached
                         }()
                         
                         Label("Saving to '\(folderName)' folder", systemImage: "folder.fill")
@@ -172,9 +170,9 @@ struct AddPasswordForm: View {
                             .background(theme.badgeBackground.opacity(0.1))
                             .cornerRadius(8)
                     }
-                    
-                    // Folder restrictions info
-                    if let restrictedCategory = folderCategory {
+
+                    // folder restrictions info
+                    if let restrictedCategory = resolvedFolderCategory {
                         Label("Category will be set to '\(restrictedCategory)'", systemImage: "info.circle.fill")
                             .font(.caption)
                             .foregroundColor(theme.badgeBackground)
@@ -222,7 +220,7 @@ struct AddPasswordForm: View {
                 }
                 
                 // Category picker
-                if !isWiFiEntry || folderCategory == nil {
+                if !isWiFiEntry || resolvedFolderCategory == nil {
                     categorySection
                 }
                 
@@ -232,7 +230,12 @@ struct AddPasswordForm: View {
                         .buttonStyle(.bordered)
                         .controlSize(.large)
                     
-                    Button("Save", action: saveAction)
+                    Button("Save") {
+                        Task {
+                            await saveAction()
+                        }
+                    }
+
                         .buttonStyle(.borderedProminent)
                         .tint(theme.badgeBackground)
                         .controlSize(.large)
@@ -263,8 +266,8 @@ struct AddPasswordForm: View {
             Text("Your password is weak. Do you want to save it anyway?")
         }
         .alert("Category Mismatch", isPresented: $showCategoryMismatchAlert) {
-            Button("Use '\(folderCategory ?? "")'") {
-                if let restrictedCategory = folderCategory {
+            Button("Use '\(resolvedFolderCategory ?? "")'") {
+                if let restrictedCategory = resolvedFolderCategory {
                     category = restrictedCategory
                 }
             }
@@ -272,7 +275,7 @@ struct AddPasswordForm: View {
                 performSave()
             }
         } message: {
-            Text("You're adding to a folder which uses '\(folderCategory ?? "")' category. Do you want to auto-correct the category?")
+            Text("You're adding to a folder which uses '\(resolvedFolderCategory ?? "")' category. Do you want to auto-correct the category?")
         }
         .onAppear {
             setupInitialState()
@@ -840,7 +843,7 @@ struct AddPasswordForm: View {
                 .disabled(shouldRestrictCategory && existingEntry == nil)
             }
             
-            if shouldRestrictCategory, let restrictedCategory = folderCategory {
+            if shouldRestrictCategory, let restrictedCategory = resolvedFolderCategory {
                 HStack(spacing: 6) {
                     Image(systemName: category == restrictedCategory ? "checkmark.circle.fill" : "info.circle.fill")
                         .foregroundColor(category == restrictedCategory ? .green : .orange)
@@ -888,8 +891,8 @@ struct AddPasswordForm: View {
 
     private func setupInitialState() {
         if existingEntry == nil {
-                temporaryEntryID = UUID()
-            }
+            temporaryEntryID = UUID()
+        }
         
         if let existingPrefix = countryCodes.first(where: { phn.hasPrefix($0.code) }) {
             selectedCode = existingPrefix
@@ -906,8 +909,6 @@ struct AddPasswordForm: View {
             phn = entry.phn ?? ""
             website = entry.website ?? ""
             category = entry.category ?? "Other"
-            
-            // Load new fields from existing entry
             notes = entry.notes ?? ""
             isFavorite = entry.isFavorite
             
@@ -916,13 +917,18 @@ struct AddPasswordForm: View {
                 expiryDate = expiry
             }
             
-            // Load tags (assuming you have a tags relationship or comma-separated string)
             if let tagsString = entry.tags {
-                tags = tagsString.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                tags = tagsString.components(separatedBy: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
             }
         } else {
-            if let restrictedCategory = folderCategory {
-                category = restrictedCategory
+            // Resolve folder category asynchronously
+            Task {
+                resolvedFolderCategory = await resolveFolderCategory()
+                if let restrictedCategory = resolvedFolderCategory {
+                    category = restrictedCategory
+                }
             }
         }
         
@@ -1034,8 +1040,8 @@ struct AddPasswordForm: View {
         }
     }
 
-    private func saveAction() {
-        guard CryptoHelper.keyStorage != nil else {
+    private func saveAction() async {
+        guard await SecureKeyStorage.shared.hasKey() else {
             print("Cannot save: master password not unlocked")
             return
         }
@@ -1043,7 +1049,7 @@ struct AddPasswordForm: View {
         guard !serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard !passwordData.isEmpty else { return }
         
-        if existingEntry == nil, let restrictedCategory = folderCategory, category != restrictedCategory {
+        if existingEntry == nil, let restrictedCategory = resolvedFolderCategory, category != restrictedCategory {
             showCategoryMismatchAlert = true
             return
         }
@@ -1057,109 +1063,117 @@ struct AddPasswordForm: View {
     }
 
     private func performSave() {
-        guard CryptoHelper.keyStorage != nil else {
-            print("Cannot save: master password not unlocked")
-            return
-        }
-        
-        guard !serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        guard !passwordData.isEmpty else { return }
-        
-        if existingEntry == nil, let restrictedCategory = folderCategory, category != restrictedCategory {
-            showCategoryMismatchAlert = true
-            return
-        }
+        Task {
+            guard await SecureKeyStorage.shared.hasKey() else {
+                print("Cannot save: master password not unlocked")
+                return
+            }
 
-        if passwordStrength == "Weak" {
-            confirmWeakPassword = true
-            return
-        }
+            guard !serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            guard !passwordData.isEmpty else { return }
 
-        performActualSave()
+            if existingEntry == nil,
+               let restrictedCategory = resolvedFolderCategory,
+               category != restrictedCategory
+            {
+                showCategoryMismatchAlert = true
+                return
+            }
+
+            if passwordStrength == "Weak" {
+                confirmWeakPassword = true
+                return
+            }
+
+            performActualSave()
+        }
     }
+
     
     private func performActualSave() {
-        guard CryptoHelper.keyStorage != nil else {
-            print("Cannot save: master password not unlocked")
-            return
+        Task {
+            guard await SecureKeyStorage.shared.hasKey() else {
+                print("Cannot save: master password not unlocked")
+                return
+            }
+            
+            guard !serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            guard !passwordData.isEmpty else { return }
+            
+            let secureStorage = SecurePasswordStorage()
+            secureStorage.set(passwordData)
+            
+            defer {
+                secureStorage.clear()
+                passwordData.secureWipe()
+                passwordDisplay = ""
+            }
+            
+            // Apply folder category restriction
+            if existingEntry == nil, let restrictedCategory = resolvedFolderCategory {
+                category = restrictedCategory
+            }
+            
+            if isWiFiEntry && category != "Wi-Fi" {
+                category = "Wi-Fi"
+            }
+            
+            guard let secureData = secureStorage.get() else { return }
+            
+            let context = PersistenceController.shared.container.viewContext
+            let tagsString = tags.isEmpty ? nil : tags.joined(separator: ",")
+            
+            if let editingEntry = existingEntry {
+                await CoreDataHelper.upsertPassword(
+                    entry: editingEntry,
+                    serviceName: serviceName,
+                    username: username,
+                    lgdata: lgdata.isEmpty ? nil : lgdata,
+                    countryCode: countryCode,
+                    phn: phn,
+                    website: website,
+                    passwordData: secureData,
+                    category: category,
+                    folder: selectedFolder,
+                    notes: notes.isEmpty ? nil : notes,
+                    isFavorite: isFavorite,
+                    passwordExpiry: setPasswordExpiry ? expiryDate : nil,
+                    tags: tagsString,
+                    context: context
+                )
+            } else {
+                await CoreDataHelper.savePassword(
+                    serviceName: serviceName,
+                    username: username,
+                    lgdata: lgdata.isEmpty ? nil : lgdata,
+                    countryCode: countryCode,
+                    phn: phn,
+                    website: website,
+                    passwordData: secureData,
+                    category: category,
+                    folder: selectedFolder,
+                    notes: notes.isEmpty ? nil : notes,
+                    isFavorite: isFavorite,
+                    passwordExpiry: setPasswordExpiry ? expiryDate : nil,
+                    tags: tagsString,
+                    context: context
+                )
+            }
+            
+            // Clear form
+            serviceName = ""
+            username = ""
+            lgdata = ""
+            phn = ""
+            website = ""
+            notes = ""
+            tags = []
+            isFavorite = false
+            setPasswordExpiry = false
+            resolvedFolderCategory = nil
+            
+            onCancel()
         }
-        
-        guard !serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        guard !passwordData.isEmpty else { return }
-        
-        let secureStorage = SecurePasswordStorage()
-        secureStorage.set(passwordData)
-        
-        defer {
-            secureStorage.clear()
-            passwordData.secureWipe()
-            passwordDisplay = ""
-        }
-        
-        if existingEntry == nil, let restrictedCategory = folderCategory {
-            category = restrictedCategory
-        }
-        
-        if isWiFiEntry && category != "Wi-Fi" {
-            category = "Wi-Fi"
-        }
-        
-        guard let secureData = secureStorage.get() else {
-            return
-        }
-        
-        let context = PersistenceController.shared.container.viewContext
-        
-        // Prepare tags string
-        let tagsString = tags.isEmpty ? nil : tags.joined(separator: ",")
-
-        if let editingEntry = existingEntry {
-            CoreDataHelper.upsertPassword(
-                entry: editingEntry,
-                serviceName: serviceName,
-                username: username,
-                lgdata: lgdata.isEmpty ? nil : lgdata,
-                countryCode: countryCode,
-                phn: phn,
-                website: website,
-                passwordData: secureData,
-                category: category,
-                folder: selectedFolder,
-                notes: notes.isEmpty ? nil : notes,
-                isFavorite: isFavorite,
-                passwordExpiry: setPasswordExpiry ? expiryDate : nil,
-                tags: tagsString,
-                context: context
-            )
-        } else {
-            CoreDataHelper.savePassword(
-                serviceName: serviceName,
-                username: username,
-                lgdata: lgdata.isEmpty ? nil : lgdata,
-                countryCode: countryCode,
-                phn: phn,
-                website: website,
-                passwordData: secureData,
-                category: category,
-                folder: selectedFolder,
-                notes: notes.isEmpty ? nil : notes,
-                isFavorite: isFavorite,
-                passwordExpiry: setPasswordExpiry ? expiryDate : nil,
-                tags: tagsString,
-                context: context
-            )
-        }
-
-        serviceName = ""
-        username = ""
-        lgdata = ""
-        phn = ""
-        website = ""
-        notes = ""
-        tags = []
-        isFavorite = false
-        setPasswordExpiry = false
-        onCancel()
     }
     
     private func copyToClipboard_FINAL(_ text: String) {

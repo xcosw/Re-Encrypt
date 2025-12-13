@@ -1,41 +1,38 @@
 import SwiftUI
 import LocalAuthentication
-// MARK: - UnlockView
 
-// ==========================================
-// 2. APP STATE WITH VALIDATION
-// ==========================================
-// MARK: - Lock Reason Enum
- enum AppState: Equatable {
+// MARK: - App State
+enum AppState: Equatable {
     case setup
     case locked(reason: LockReason = .normal)
     case unlocked(UnlockToken)
     
-     enum LockReason : Equatable{
-         case normal
-         case manual
-         case autoLock
-         case sessionTimeout
-         case memoryPressure
-         case background
-         case tokenExpired
-         case maxAttempts
-         
-         var message: String {
-             switch self {
-             case .normal: return "App Loked Normal"
-             case .manual: return "App Locked"
-             case .autoLock: return "Locked due to inactivity"
-             case .sessionTimeout: return "Session expired"
-             case .memoryPressure: return "Locked due to memory pressure"
-             case .background: return "Locked in background"
-             case .tokenExpired: return "Session token expired"
-             case .maxAttempts: return "Too Many Attempts"
-             }
-         }
-     }
+    enum LockReason: Equatable {
+        case normal
+        case manual
+        case autoLock
+        case sessionTimeout
+        case memoryPressure
+        case background
+        case tokenExpired
+        case maxAttempts
+        
+        var message: String {
+            switch self {
+            case .normal: return "App Locked"
+            case .manual: return "App Locked"
+            case .autoLock: return "Locked due to inactivity"
+            case .sessionTimeout: return "Session expired"
+            case .memoryPressure: return "Locked due to memory pressure"
+            case .background: return "Locked in background"
+            case .tokenExpired: return "Session token expired"
+            case .maxAttempts: return "Too Many Attempts"
+            }
+        }
+    }
 }
 
+// MARK: - UnlockView
 @available(macOS 15.0, *)
 struct UnlockView: View {
     // MARK: - Environment
@@ -90,7 +87,9 @@ struct UnlockView: View {
             }
         }
         .onAppear {
-            setupUnlockView()
+            Task {
+                await setupUnlockView()
+            }
         }
         .onDisappear {
             cleanup()
@@ -101,7 +100,6 @@ struct UnlockView: View {
     
     private var passwordView: some View {
         VStack(spacing: 24) {
-            // Icon
             ZStack {
                 Circle()
                     .fill(theme.badgeBackground.opacity(0.2))
@@ -113,7 +111,6 @@ struct UnlockView: View {
                     .symbolEffect(.pulse)
             }
             
-            // Title and message
             VStack(spacing: 8) {
                 Text(lockTitleForReason)
                     .font(.title.bold())
@@ -125,7 +122,6 @@ struct UnlockView: View {
                     .multilineTextAlignment(.center)
             }
             
-            // Password field
             VStack(spacing: 12) {
                 HStack {
                     Image(systemName: "key.fill")
@@ -135,7 +131,11 @@ struct UnlockView: View {
                         .textFieldStyle(.plain)
                         .font(.body)
                         .focused($isFocused)
-                        .onSubmit { attemptPasswordUnlock() }
+                        .onSubmit {
+                            Task {
+                                await attemptPasswordUnlock()
+                            }
+                        }
                         .disabled(lockoutTimeRemaining > 0)
                 }
                 .padding(12)
@@ -146,7 +146,6 @@ struct UnlockView: View {
                         .stroke(isFocused ? theme.badgeBackground : Color.clear, lineWidth: 2)
                 )
                 
-                // Error message
                 if let errorMessage {
                     HStack {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -158,7 +157,6 @@ struct UnlockView: View {
                     .transition(.opacity)
                 }
                 
-                // Lockout timer
                 if lockoutTimeRemaining > 0 {
                     HStack {
                         Image(systemName: "clock.fill")
@@ -171,8 +169,11 @@ struct UnlockView: View {
             }
             .frame(width: 320)
             
-            // Unlock button
-            Button(action: attemptPasswordUnlock) {
+            Button {
+                Task {
+                    await attemptPasswordUnlock()
+                }
+            } label: {
                 HStack {
                     if isAttemptingUnlock {
                         ProgressView()
@@ -186,13 +187,12 @@ struct UnlockView: View {
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            /*.tint(theme.badgeBackground)*/
+            .tint(theme.badgeBackground)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .frame(width: 320)
             .disabled(isAttemptingUnlock || passwordInput.isEmpty || lockoutTimeRemaining > 0)
             
-            // Biometric option
             if shouldShowBiometricOption {
                 VStack(spacing: 8) {
                     Divider().frame(width: 320)
@@ -209,12 +209,11 @@ struct UnlockView: View {
                     .disabled(lockoutTimeRemaining > 0)
                 }
             }
-            
         }
         .padding(40)
-        //.appBackground()
-        //.background(in: RoundedRectangle(cornerRadius: 20))
-        //.shadow(color: .black.opacity(0.2), radius: 20, y: 10)
+        .appBackground()
+        .background(in: RoundedRectangle(cornerRadius: 20))
+        .shadow(color: .black.opacity(0.2), radius: 20, y: 10)
     }
     
     // MARK: - Biometric View
@@ -253,7 +252,11 @@ struct UnlockView: View {
             }
             
             VStack(spacing: 16) {
-                Button(action: attemptBiometricUnlock) {
+                Button {
+                    Task {
+                        await attemptBiometricUnlock()
+                    }
+                } label: {
                     HStack {
                         if isBiometricAuthenticating {
                             ProgressView()
@@ -336,7 +339,6 @@ struct UnlockView: View {
                         .textFieldStyle(.plain)
                         .font(.system(.body, design: .monospaced))
                         .onChange(of: twoFactorCode) { _, newValue in
-                            // Limit to 6 digits
                             if newValue.count > 6 {
                                 twoFactorCode = String(newValue.prefix(6))
                             }
@@ -358,7 +360,11 @@ struct UnlockView: View {
             }
             .frame(width: 320)
             
-            Button(action: verify2FAAndUnlock) {
+            Button {
+                Task {
+                    await verify2FAAndUnlock()
+                }
+            } label: {
                 HStack {
                     if isAttemptingUnlock {
                         ProgressView()
@@ -377,12 +383,12 @@ struct UnlockView: View {
             .frame(width: 320)
             .disabled(isAttemptingUnlock || twoFactorCode.count != 6)
             
-            Button(action: {
+            Button {
                 show2FAPrompt = false
                 tempPasswordForUnlock = nil
                 twoFactorCode = ""
                 errorMessage = nil
-            }) {
+            } label: {
                 Text("Cancel")
             }
             .buttonStyle(.bordered)
@@ -397,17 +403,15 @@ struct UnlockView: View {
     
     // MARK: - Setup & Cleanup
     
-    private func setupUnlockView() {
-        failedAttempts = CryptoHelper.failedAttempts
+    private func setupUnlockView() async {
+        failedAttempts = await AuthenticationManager.shared.getCurrentAttempts()
         
-        // Auto-trigger biometric if available and preferred
         if CryptoHelper.biometricUnlockEnabled &&
            biometricManager.isBiometricAvailable &&
            biometricManager.isPasswordStored {
             showBiometricPrompt = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                attemptBiometricUnlock()
-            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await attemptBiometricUnlock()
         } else {
             showBiometricPrompt = false
             isFocused = true
@@ -423,7 +427,7 @@ struct UnlockView: View {
     
     // MARK: - Password Unlock
     
-    private func attemptPasswordUnlock() {
+    private func attemptPasswordUnlock() async {
         guard !passwordInput.isEmpty && lockoutTimeRemaining == 0 else {
             showError("Enter your master password")
             return
@@ -433,55 +437,41 @@ struct UnlockView: View {
         errorMessage = nil
         biometricError = nil
         
-        // Convert to Data
         var passwordData = Data(passwordInput.utf8)
         defer {
             passwordData.secureWipe()
             securelyEraseInput()
         }
         
-        // Store for processing
         securePasswordStorage.set(passwordData)
         
-        // Do unlock with randomized delay (timing attack mitigation)
-        Task { @MainActor in
-            let randomDelay = UInt64.random(in: 100_000_000...800_000_000)
-            try? await Task.sleep(nanoseconds: randomDelay)
-            await performPasswordUnlock()
-        }
+        let randomDelay = UInt64.random(in: 100_000_000...800_000_000)
+        try? await Task.sleep(nanoseconds: randomDelay)
+        await performPasswordUnlock()
     }
-
     
     private func performPasswordUnlock() async {
         defer {
             isAttemptingUnlock = false
         }
         
-        do {
-            guard let passwordData = securePasswordStorage.get() else {
-                showError("Failed to retrieve password")
-                return
-            }
-            
-            // Verify password
-            guard await CryptoHelper.verifyMasterPassword(password: passwordData, context: viewContext) else {
-                handleFailedAttempt()
-                return
-            }
-            
-            // Check if 2FA is required
+        guard let passwordData = securePasswordStorage.get() else {
+            showError("Failed to retrieve password")
+            return
+        }
+        
+        let verified = await CryptoHelper.verifyMasterPassword(password: passwordData, context: viewContext)
+        
+        if verified {
             if TwoFactorAuthManager.shared.isEnabled {
                 print("🔐 2FA required after password")
                 tempPasswordForUnlock = passwordData
                 show2FAPrompt = true
             } else {
-                // Complete unlock
                 completePasswordUnlock(with: passwordData)
             }
-            
-        } catch {
-            showError("Authentication failed: \(error.localizedDescription)")
-            handleFailedAttempt()
+        } else {
+            await handleFailedAttempt()
         }
     }
     
@@ -491,124 +481,103 @@ struct UnlockView: View {
         }
         
         print("✅ Unlock successful")
-        CryptoHelper.failedAttempts = 0
+        Task {
+            await AuthenticationManager.shared.resetAttempts()
+        }
         onUnlock(passwordData)
     }
     
-// MARK: - Biometric Unlock
+    // MARK: - Biometric Unlock
     
-    private func attemptBiometricUnlock() {
-        print("Biometric unlock requested")
+    private func attemptBiometricUnlock() async {
+        print("🔐 Biometric unlock requested")
         biometricAttempted = true
         isBiometricAuthenticating = true
         biometricError = nil
         errorMessage = nil
         
-        Task { @MainActor in
-            let result = await biometricManager.authenticate()
-            self.handleBiometricResult(result)
-            self.isBiometricAuthenticating = false
-        }
+        let result = await biometricManager.authenticate()
+        await handleBiometricResult(result)
+        isBiometricAuthenticating = false
     }
     
-    private func handleBiometricResult(_ result: Result<Data, BiometricError>) {
+    private func handleBiometricResult(_ result: Result<Data, BiometricError>) async {
         switch result {
         case .success(let passwordData):
-            print("Biometric authentication successful")
+            print("✅ Biometric authentication successful")
+            securePasswordStorage.set(passwordData)
             
-            do {
-                // Securely store password from Secure Enclave
-                 securePasswordStorage.set(passwordData)
-                
-                if TwoFactorAuthManager.shared.isEnabled {
-                    print("2FA required after biometric")
-                    tempPasswordForUnlock = passwordData
-                    showBiometricPrompt = false
-                    show2FAPrompt = true
-                } else {
-                    // Perform unlock with proper async delay + anti-timing
-                    Task { @MainActor in
-                        // Small random delay to prevent timing attacks
-                        let randomDelay = UInt64.random(in: 150_000_000...400_000_000) // 0.15–0.4s
-                        try? await Task.sleep(nanoseconds: randomDelay)
-                        
-                        await self.performBiometricUnlock()
-                    }
-                }
-                
-            } catch {
-                showError("Failed to process biometric data")
-                securePasswordStorage.clear()
+            if TwoFactorAuthManager.shared.isEnabled {
+                print("🔐 2FA required after biometric")
+                tempPasswordForUnlock = passwordData
+                showBiometricPrompt = false
+                show2FAPrompt = true
+            } else {
+                let randomDelay = UInt64.random(in: 150_000_000...400_000_000)
+                try? await Task.sleep(nanoseconds: randomDelay)
+                await performBiometricUnlock()
             }
             
         case .failure(let error):
-            print("Biometric failed: \(error.errorDescription ?? "unknown")")
+            print("❌ Biometric failed: \(error.errorDescription ?? "unknown")")
             biometricError = error
-            handleBiometricFailure(error)
+            await handleBiometricFailure(error)
         }
     }
+    
     private func performBiometricUnlock() async {
-        do {
-            guard let secureData = securePasswordStorage.get() else {
-                showError("Failed to retrieve secure data")
-                securePasswordStorage.clear()
-                return
-            }
-            
-            // Verify password
-            let unlockResult = await CryptoHelper.unlockMasterPassword(secureData, context: viewContext)
-            
-            if unlockResult {
-                print("✅ Unlock successful via biometric")
-                CryptoHelper.failedAttempts = 0
-                onUnlock(secureData)
-            } else {
-                print("❌ Unlock failed with biometric")
-                showError("Authentication failed")
-                handleFailedAttempt()
-            }
-            
-        } catch {
-            showError("Authentication error: \(error.localizedDescription)")
-            handleFailedAttempt()
+        guard let secureData = securePasswordStorage.get() else {
+            showError("Failed to retrieve secure data")
+            securePasswordStorage.clear()
+            return
+        }
+        
+        let unlockResult = await CryptoHelper.unlockMasterPassword(secureData, context: viewContext)
+        
+        if unlockResult {
+            print("✅ Unlock successful via biometric")
+            await AuthenticationManager.shared.resetAttempts()
+            onUnlock(secureData)
+        } else {
+            print("❌ Unlock failed with biometric")
+            showError("Authentication failed")
+            await handleFailedAttempt()
         }
         
         securePasswordStorage.clear()
     }
     
-    private func handleBiometricFailure(_ error: BiometricError) {
+    private func handleBiometricFailure(_ error: BiometricError) async {
         securePasswordStorage.clear()
         
         switch error {
         case .cancelled:
-            print("User cancelled")
+            print("ℹ️ User cancelled")
             biometricError = nil
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                showBiometricPrompt = false
-                isFocused = true
-            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            showBiometricPrompt = false
+            isFocused = true
             
         case .fallback, .unavailable:
-            print("Fallback to password")
+            print("ℹ️ Fallback to password")
             showBiometricPrompt = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                isFocused = true
-            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            isFocused = true
             
         case .lockout:
-            print("Biometric lockout")
+            print("⚠️ Biometric lockout")
             showError("Biometric temporarily locked. Use password.")
-            applyLockout()
+            await applyLockout()
             showBiometricPrompt = false
             
         case .unknown:
-            print("Unknown biometric error")
+            print("❌ Unknown biometric error")
         }
     }
     
-// MARK: - 2FA Verification
+    // MARK: - 2FA Verification
     
-    private func verify2FAAndUnlock() {
+    private func verify2FAAndUnlock() async {
         guard twoFactorCode.count == 6 else {
             showError("Invalid code length")
             return
@@ -622,56 +591,75 @@ struct UnlockView: View {
         
         isAttemptingUnlock = true
         
-        // Verify 2FA code
-        let verified = TwoFactorAuthManager.shared.verify(code: twoFactorCode, masterPassword: passwordData)
+        let verified = await TwoFactorAuthManager.shared.verify(code: twoFactorCode, masterPassword: passwordData)
         
         if verified {
             print("✅ 2FA verified")
-            CryptoHelper.failedAttempts = 0
+            await AuthenticationManager.shared.resetAttempts()
             onUnlock(passwordData)
             
-            // Cleanup
             tempPasswordForUnlock = nil
             twoFactorCode = ""
         } else {
             showError("Invalid 2FA code")
-            handleFailedAttempt()
+            await handleFailedAttempt()
             twoFactorCode = ""
         }
         
         isAttemptingUnlock = false
     }
     
-// MARK: - Failed Attempts & Lockout
+    // MARK: - Failed Attempts & Lockout
     
-    private func handleFailedAttempt() {
-        CryptoHelper.failedAttempts += 1
-        failedAttempts = CryptoHelper.failedAttempts
+    private func handleFailedAttempt() async {
+        let wiped = await AuthenticationManager.shared.recordFailedAttempt(context: viewContext)
+        failedAttempts = await AuthenticationManager.shared.getCurrentAttempts()
         
-        showError("Incorrect password (\(failedAttempts)/\(CryptoHelper.maxAttempts))")
-        NSSound.beep()
-        
-        if failedAttempts >= CryptoHelper.maxAttempts {
-            // Max attempts reached
-            CryptoHelper.failedAttempts = 0
+        if wiped {
+            showError("Maximum attempts reached. All data has been wiped for security.")
+            NSSound.beep()
             onRequireSetup()
-        } else if failedAttempts >= 3 {
-            applyLockout()
+        } else {
+            let maxAttempts = AuthenticationManager.maxAttempts
+            showError("Incorrect password (\(failedAttempts)/\(maxAttempts))")
+            NSSound.beep()
+            
+            if failedAttempts >= 3 {
+                await applyLockout()
+            }
         }
         
         securePasswordStorage.clear()
     }
     
-    private func applyLockout() {
-        let lockoutDuration = min(30, failedAttempts * 5)
-        lockoutTimeRemaining = lockoutDuration
+    private func applyLockout() async {
+        let backoffTime = await AuthenticationManager.shared.getBackoffTimeRemaining()
         
-        lockoutTask = Task {
-            for _ in 0..<lockoutDuration {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                await MainActor.run {
-                    if lockoutTimeRemaining > 0 {
-                        lockoutTimeRemaining -= 1
+        if backoffTime > 0 {
+            lockoutTimeRemaining = Int(backoffTime)
+            showError("Too many attempts. Wait \(lockoutTimeRemaining) seconds.")
+            
+            lockoutTask = Task {
+                while lockoutTimeRemaining > 0 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    await MainActor.run {
+                        if lockoutTimeRemaining > 0 {
+                            lockoutTimeRemaining -= 1
+                        }
+                    }
+                }
+            }
+        } else {
+            let lockoutDuration = min(30, failedAttempts * 5)
+            lockoutTimeRemaining = lockoutDuration
+            
+            lockoutTask = Task {
+                for _ in 0..<lockoutDuration {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    await MainActor.run {
+                        if lockoutTimeRemaining > 0 {
+                            lockoutTimeRemaining -= 1
+                        }
                     }
                 }
             }
@@ -686,8 +674,10 @@ struct UnlockView: View {
             errorMessage = nil
             biometricError = nil
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            attemptBiometricUnlock()
+        
+        Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await attemptBiometricUnlock()
         }
     }
     
@@ -697,8 +687,12 @@ struct UnlockView: View {
             biometricError = nil
             errorMessage = nil
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            isFocused = true
+        
+        Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await MainActor.run {
+                isFocused = true
+            }
         }
     }
     
@@ -721,56 +715,38 @@ struct UnlockView: View {
         lockoutTimeRemaining == 0
     }
     
-// MARK: - Lock Reason Helpers
+    // MARK: - Lock Reason Helpers
     
     private var lockIconForReason: String {
         switch lockReason {
-        case .memoryPressure:
-            return "exclamationmark.triangle.fill"
-        case .sessionTimeout:
-            return "clock.fill"
-        case .maxAttempts:
-            return "xmark.shield.fill"
-        case .tokenExpired:
-            return "hourglass.bottomhalf.filled"
-        case .background:
-            return "moon.fill"
-        default:
-            return "lock.shield.fill"
+        case .memoryPressure: return "exclamationmark.triangle.fill"
+        case .sessionTimeout: return "clock.fill"
+        case .maxAttempts: return "xmark.shield.fill"
+        case .tokenExpired: return "hourglass.bottomhalf.filled"
+        case .background: return "moon.fill"
+        default: return "lock.shield.fill"
         }
     }
     
     private var lockTitleForReason: String {
         switch lockReason {
-        case .memoryPressure:
-            return "Locked - Memory Pressure"
-        case .sessionTimeout:
-            return "Session Expired"
-        case .maxAttempts:
-            return "Too Many Attempts"
-        case .tokenExpired:
-            return "Session Expired"
-        case .background:
-            return "Auto-Locked"
-        default:
-            return "App Locked"
+        case .memoryPressure: return "Locked - Memory Pressure"
+        case .sessionTimeout: return "Session Expired"
+        case .maxAttempts: return "Too Many Attempts"
+        case .tokenExpired: return "Session Expired"
+        case .background: return "Auto-Locked"
+        default: return "App Locked"
         }
     }
     
     private var lockMessageForReason: String {
         switch lockReason {
-        case .memoryPressure:
-            return "Locked due to system memory pressure"
-        case .sessionTimeout:
-            return "Your session expired due to inactivity"
-        case .maxAttempts:
-            return "Account locked after too many failed attempts"
-        case .tokenExpired:
-            return "Your security token has expired"
-        case .background:
-            return "App was locked when moved to background"
-        default:
-            return "Enter your master password to continue"
+        case .memoryPressure: return "Locked due to system memory pressure"
+        case .sessionTimeout: return "Your session expired due to inactivity"
+        case .maxAttempts: return "Account locked after too many failed attempts"
+        case .tokenExpired: return "Your security token has expired"
+        case .background: return "App was locked when moved to background"
+        default: return "Enter your master password to continue"
         }
     }
 }

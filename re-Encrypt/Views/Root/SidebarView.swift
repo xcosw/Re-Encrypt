@@ -30,12 +30,12 @@ private struct DefaultFolders {
         "Cryptocurrency"
     ]
     
-    @MainActor static func createDefaultFolders(context: NSManagedObjectContext) {
+    @MainActor static func createDefaultFolders(context: NSManagedObjectContext) async {
         for name in suggestions {
             // Check if folder already exists
-            let existingFolder = CoreDataHelper.findMatchingFolder(for: name, context: context)
+            let existingFolder = await CoreDataHelper.findMatchingFolder(for: name, context: context)
             if existingFolder == nil {
-                _ = CoreDataHelper.createFolder(name: name, context: context)
+                _ = await CoreDataHelper.createFolder(name: name, context: context)
             }
         }
     }
@@ -161,10 +161,13 @@ struct SidebarView: View {
         .alert("New Folder", isPresented: $showingNewFolderAlert) {
             TextField("Folder Name", text: $newFolderName)
             Button("Create") {
+                
                 guard !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                if let newFolder = CoreDataHelper.createFolder(name: newFolderName, context: viewContext) {
-                    CoreDataHelper.autoAssignEntriesToFolder(newFolder, context: viewContext)
-                }
+                Task {
+                    
+                    if let newFolder = await CoreDataHelper.createFolder(name: newFolderName, context: viewContext) {
+                        await CoreDataHelper.autoAssignEntriesToFolder(newFolder, context: viewContext)
+                }}
                 newFolderName = ""
             }
             Button("Cancel", role: .cancel) {
@@ -175,8 +178,10 @@ struct SidebarView: View {
         }
         .alert("Add Default Folders", isPresented: $showingDefaultFoldersAlert) {
             Button("Add All") {
+                Task {
+                    await
                 DefaultFolders.createDefaultFolders(context: viewContext)
-            }
+            }}
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will create default folders for common categories like Banking, Email, Social Media, Wi-Fi, etc.")
@@ -198,8 +203,16 @@ struct SidebarView: View {
                         
                         // User folders
                         ForEach(folders, id: \.objectID) { folder in
-                            folderGridTile(folder: folder)
+                            FolderGridTileView(
+                                folder: folder,
+                                selectedSidebar: $selectedSidebar,
+                                renamingFolderID: $renamingFolderID,
+                                renameText: $renameText,
+                                renamingFieldFocused: $renamingFieldFocused
+                            )
+                            .environmentObject(theme)
                         }
+
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 12)
@@ -220,8 +233,16 @@ struct SidebarView: View {
                     if !folders.isEmpty {
                         Section {
                             ForEach(folders, id: \.objectID) { folder in
-                                folderListTile(folder: folder)
+                                FolderListTileView(
+                                    folder: folder,
+                                    selectedSidebar: $selectedSidebar,
+                                    renamingFolderID: $renamingFolderID,
+                                    renameText: $renameText,
+                                    renamingFieldFocused: $renamingFieldFocused
+                                )
+                                .environmentObject(theme)
                             }
+
                         } header: {
                             Text("My Folders")
                                 .font(.caption.bold())
@@ -279,81 +300,6 @@ struct SidebarView: View {
         .buttonStyle(.plain)
     }
     
-    @ViewBuilder
-    private func folderGridTile(folder: Folder) -> some View {
-        let folderID = folder.objectID
-        let name = CoreDataHelper.decryptedFolderNameString(folder) ?? "Folder"
-        let normalizedName = name.replacingOccurrences(of: "-", with: "")
-        let iconName = CategoryIcons.allKnown.contains(normalizedName) ? CategoryIcons.icon(for: normalizedName) : "folder.fill"
-        let isSelected = selectedSidebar == .folder(folderID)
-        let isRenaming = renamingFolderID == folderID
-        
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                selectedSidebar = .folder(folderID)
-            }
-        } label: {
-            VStack(spacing: 8) {
-                ZStack {
-                    Circle()
-                        .fill(isSelected ? theme.badgeBackground : theme.badgeBackground.opacity(0.12))
-                        .frame(width: 44, height: 44)
-                    
-                    Image(systemName: iconName)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(isSelected ? Color.white : theme.badgeBackground)
-                }
-                
-                if isRenaming {
-                    TextField("Name", text: $renameText, onCommit: {
-                        renameFolder(folder)
-                    })
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
-                    .focused($renamingFieldFocused)
-                    .onAppear { renamingFieldFocused = true }
-                } else {
-                    Text(name)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(isSelected ? theme.badgeBackground : theme.primaryTextColor)
-                        .lineLimit(1)
-                }
-                
-                countBadge(countForFolder(folder), isSelected: isSelected)
-            }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? theme.adaptiveSelectionFill : theme.adaptiveTileBackground)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(isSelected ? theme.badgeBackground : Color.clear, lineWidth: 2)
-            )
-            .shadow(color: isSelected ? theme.badgeBackground.opacity(0.2) : .clear, radius: 4, y: 2)
-        }
-        .buttonStyle(.plain)
-        .onTapGesture(count: 2) {
-            startRenaming(folder, name: name)
-        }
-        .contextMenu {
-            Button {
-                startRenaming(folder, name: name)
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            
-            Divider()
-            
-            Button(role: .destructive) {
-                deleteFolder(folder)
-            } label: {
-                Label("Delete Folder", systemImage: "trash")
-            }
-        }
-    }
     
     // MARK: - List Tile (Enhanced)
     
@@ -378,56 +324,7 @@ struct SidebarView: View {
         }
     }
     
-    @ViewBuilder
-    private func folderListTile(folder: Folder) -> some View {
-        let folderID = folder.objectID
-        let name = CoreDataHelper.decryptedFolderNameString(folder) ?? "Folder"
-        let isRenaming = renamingFolderID == folderID
-        let normalizedName = name.replacingOccurrences(of: "-", with: "")
-        let iconName = CategoryIcons.allKnown.contains(normalizedName) ? CategoryIcons.icon(for: normalizedName) : "folder.fill"
-        
-        NavigationLink(value: SidebarSelection.folder(folderID)) {
-            HStack(spacing: 10) {
-                if isRenaming {
-                    TextField("Folder Name", text: $renameText, onCommit: { renameFolder(folder) })
-                        .textFieldStyle(.roundedBorder)
-                        .focused($renamingFieldFocused)
-                        .onAppear { renamingFieldFocused = true }
-                } else {
-                    Image(systemName: iconName)
-                        .font(.body)
-                        .foregroundStyle(theme.badgeBackground.gradient)
-                        .frame(width: 24)
-                    
-                    Text(name)
-                        .font(.body)
-                        .foregroundColor(theme.primaryTextColor)
-                    
-                    Spacer()
-                    
-                    countBadge(countForFolder(folder), isSelected: false)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .onTapGesture { selectedSidebar = .folder(folderID) }
-        .onTapGesture(count: 2) { startRenaming(folder, name: name) }
-        .contextMenu {
-            Button {
-                startRenaming(folder, name: name)
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            
-            Divider()
-            
-            Button(role: .destructive) {
-                deleteFolder(folder)
-            } label: {
-                Label("Delete Folder", systemImage: "trash")
-            }
-        }
-    }
+   
     
     // MARK: - Count Badge
     
@@ -544,10 +441,10 @@ struct SidebarView: View {
             cancelRenaming()
             return
         }
-        
-        CoreDataHelper.renameFolder(folder, newName: trimmed, context: viewContext)
-        CoreDataHelper.autoAssignEntriesToFolder(folder, context: viewContext)
-        
+        Task{
+            await CoreDataHelper.renameFolder(folder, newName: trimmed, context: viewContext)
+            await CoreDataHelper.autoAssignEntriesToFolder(folder, context: viewContext)
+        }
         cancelRenaming()
     }
    
@@ -587,3 +484,243 @@ struct SidebarView: View {
     }
 }
 
+
+@available(macOS 15.0, *)
+struct FolderGridTileView: View {
+    let folder: Folder
+
+    @EnvironmentObject private var theme: ThemeManager
+    @Environment(\.managedObjectContext) private var context
+
+    @Binding var selectedSidebar: SidebarSelection
+    @Binding var renamingFolderID: NSManagedObjectID?
+    @Binding var renameText: String
+    @FocusState.Binding var renamingFieldFocused: Bool
+
+    @State private var folderName: String = "Folder"
+
+    var body: some View {
+        let folderID = folder.objectID
+        let isSelected = selectedSidebar == .folder(folderID)
+        let isRenaming = renamingFolderID == folderID
+
+        let normalizedName = folderName.replacingOccurrences(of: "-", with: "")
+        let iconName =
+            CategoryIcons.allKnown.contains(normalizedName)
+            ? CategoryIcons.icon(for: normalizedName)
+            : "folder.fill"
+
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedSidebar = .folder(folderID)
+            }
+        } label: {
+            VStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill(isSelected ? theme.badgeBackground : theme.badgeBackground.opacity(0.12))
+                        .frame(width: 44, height: 44)
+
+                    Image(systemName: iconName)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(isSelected ? .white : theme.badgeBackground)
+                }
+
+                if isRenaming {
+                    TextField("Name", text: $renameText, onCommit: {
+                        renameFolder()
+                    })
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .focused($renamingFieldFocused)
+                    .onAppear { renamingFieldFocused = true }
+                } else {
+                    Text(folderName)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(isSelected ? theme.badgeBackground : theme.primaryTextColor)
+                        .lineLimit(1)
+                }
+
+                countBadge(countForFolder(folder), isSelected: isSelected)
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? theme.adaptiveSelectionFill : theme.adaptiveTileBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(isSelected ? theme.badgeBackground : Color.clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
+        .task {
+            // ✅ async happens HERE
+            if let name = await CoreDataHelper.decryptedFolderNameString(folder) {
+                folderName = name
+            }
+        }
+        .onTapGesture(count: 2) {
+            renameText = folderName
+            renamingFolderID = folderID
+        }
+        .contextMenu {
+            Button {
+                renameText = folderName
+                renamingFolderID = folderID
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                CoreDataHelper.deleteFolder(folder, moveItemsToUnfiled: true, context: context)
+            } label: {
+                Label("Delete Folder", systemImage: "trash")
+            }
+        }
+    }
+
+    private func renameFolder() {
+        let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        Task {
+            await CoreDataHelper.renameFolder(folder, newName: trimmed, context: context)
+            await CoreDataHelper.autoAssignEntriesToFolder(folder, context: context)
+        }
+
+        renamingFolderID = nil
+        renameText = ""
+        renamingFieldFocused = false
+    }
+
+    private func countForFolder(_ folder: Folder) -> Int {
+        CoreDataHelper.countForFolder(folder, context: context)
+    }
+
+    private func countBadge(_ count: Int, isSelected: Bool) -> some View {
+        Text("\(count)")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(isSelected ? theme.badgeBackground.opacity(0.9) : theme.badgeBackground)
+            )
+    }
+}
+
+@available(macOS 15.0, *)
+struct FolderListTileView: View {
+    let folder: Folder
+
+    @EnvironmentObject private var theme: ThemeManager
+    @Environment(\.managedObjectContext) private var context
+
+    @Binding var selectedSidebar: SidebarSelection
+    @Binding var renamingFolderID: NSManagedObjectID?
+    @Binding var renameText: String
+    @FocusState.Binding var renamingFieldFocused: Bool
+
+    @State private var folderName: String = "Folder"
+
+    var body: some View {
+        let folderID = folder.objectID
+        let isRenaming = renamingFolderID == folderID
+
+        let normalizedName = folderName.replacingOccurrences(of: "-", with: "")
+        let iconName =
+            CategoryIcons.allKnown.contains(normalizedName)
+            ? CategoryIcons.icon(for: normalizedName)
+            : "folder.fill"
+
+        NavigationLink(value: SidebarSelection.folder(folderID)) {
+            HStack(spacing: 10) {
+                if isRenaming {
+                    TextField("Folder Name", text: $renameText, onCommit: renameFolder)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($renamingFieldFocused)
+                        .onAppear { renamingFieldFocused = true }
+                } else {
+                    Image(systemName: iconName)
+                        .font(.body)
+                        .foregroundStyle(theme.badgeBackground.gradient)
+                        .frame(width: 24)
+
+                    Text(folderName)
+                        .font(.body)
+                        .foregroundColor(theme.primaryTextColor)
+
+                    Spacer()
+
+                    countBadge(countForFolder(folder))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .onTapGesture {
+            selectedSidebar = .folder(folderID)
+        }
+        .onTapGesture(count: 2) {
+            renameText = folderName
+            renamingFolderID = folderID
+        }
+        .contextMenu {
+            Button {
+                renameText = folderName
+                renamingFolderID = folderID
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                CoreDataHelper.deleteFolder(folder, moveItemsToUnfiled: true, context: context)
+            } label: {
+                Label("Delete Folder", systemImage: "trash")
+            }
+        }
+        .task {
+            // ✅ async belongs HERE
+            if let name = await CoreDataHelper.decryptedFolderNameString(folder) {
+                folderName = name
+            }
+        }
+    }
+
+    private func renameFolder() {
+        let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        Task {
+            await CoreDataHelper.renameFolder(folder, newName: trimmed, context: context)
+            await CoreDataHelper.autoAssignEntriesToFolder(folder, context: context)
+        }
+
+        renamingFolderID = nil
+        renameText = ""
+        renamingFieldFocused = false
+    }
+
+    private func countForFolder(_ folder: Folder) -> Int {
+        CoreDataHelper.countForFolder(folder, context: context)
+    }
+
+    private func countBadge(_ count: Int) -> some View {
+        Text("\(count)")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(theme.badgeBackground)
+            )
+    }
+}

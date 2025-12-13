@@ -6,7 +6,7 @@ struct PasswordListView: View {
     @Environment(\.managedObjectContext) private var viewContext
     var onDelete: (PasswordEntry) -> Void
     @EnvironmentObject private var theme: ThemeManager
-    
+    @State private var decryptedPassword: SecData?
     // Inputs from parent
     @Binding var selectedPassword: PasswordEntry?
     @Binding var folderMode: FolderMode
@@ -205,9 +205,9 @@ struct PasswordListView: View {
         let request: NSFetchRequest<Folder> = Folder.fetchRequest()
         request.predicate = NSPredicate(format: "self == %@", folderID)
         
-        do {
+        Task {
             if let folder = try viewContext.fetch(request).first {
-                guard let secData = CoreDataHelper.decryptedFolderName(folder) else {
+                guard let secData = await CoreDataHelper.decryptedFolderName(folder) else {
                     return false
                 }
                 defer { secData.clear() }
@@ -225,7 +225,6 @@ struct PasswordListView: View {
                 return restrictedCategories.contains { folderName.contains($0) } ||
                        restrictedCategories.contains(folderName)
             }
-        } catch {
             return false
         }
         
@@ -398,7 +397,7 @@ struct PasswordListView: View {
             ) {
                 ForEach(sortedPasswords, id: \.objectID) { entry in
                     passwordTile(entry)
-                        .contextMenu { rowContextMenu(for: entry) }
+                        .contextMenu {  rowContextMenu(for: entry, password: decryptedPassword) }
                 }
             }
             .padding(12)
@@ -420,7 +419,7 @@ struct PasswordListView: View {
                                 selectedPassword = (selectedPassword == entry ? nil : entry)
                             }
                         }
-                        .contextMenu { rowContextMenu(for: entry) }
+                        .contextMenu { rowContextMenu(for: entry, password: decryptedPassword) }
                 }
             }
             .padding(12)
@@ -538,55 +537,43 @@ struct PasswordListView: View {
     // MARK: - ✅ ENHANCED CONTEXT MENU WITH SECURECLIPBOARD
     
     @ViewBuilder
-    private func rowContextMenu(for entry: PasswordEntry) -> some View {
+    private func rowContextMenu(for entry: PasswordEntry, password: SecData?) -> some View {
         Button {
             selectedPassword = entry
         } label: {
             Label("Select", systemImage: "checkmark.circle")
         }
-        
+
         Divider()
-        
+
         Button {
             copyWithFeedback(entry.serviceName ?? "", fieldName: "Service", entryID: entry.id ?? UUID())
         } label: {
             Label("Copy Service", systemImage: "doc.on.doc")
         }
-        
-        Button {
-            copyWithFeedback(entry.username ?? "", fieldName: "Username", entryID: entry.id ?? UUID())
-        } label: {
-            Label("Copy Username", systemImage: "person.crop.circle")
-        }
-        
-        if let secData = CoreDataHelper.decryptedPassword(for: entry) {
+
+        if let secData = password {
             Button {
-                // Convert to String only when copying
-                let password = secData.withUnsafeBytes { ptr in
+                let passwordString = secData.withUnsafeBytes { ptr -> String in
                     guard let base = ptr.baseAddress else { return "" }
                     let data = Data(bytes: base, count: ptr.count)
                     return String(data: data, encoding: .utf8) ?? ""
                 }
-                
-                copyWithFeedback(password, fieldName: "Password", entryID: entry.id ?? UUID())
-                
-                // SecData will be cleared when button scope ends
+                copyWithFeedback(passwordString, fieldName: "Password", entryID: entry.id ?? UUID())
             } label: {
                 Label("Copy Password", systemImage: "key")
             }
-            .onDisappear {
-                secData.clear()  // Cleanup when view disappears
-            }
         }
-        
+
         Divider()
-        
+
         Button(role: .destructive) {
             showDeleteConfirm = entry
         } label: {
             Label("Delete", systemImage: "trash")
         }
     }
+
     
     // MARK: - ✅ SECURE CLIPBOARD OPERATIONS
     

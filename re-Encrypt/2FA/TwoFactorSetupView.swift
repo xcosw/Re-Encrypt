@@ -221,8 +221,10 @@ struct TwoFactorSetupView: View {
                     }
                     // Auto-verify when 6 digits entered
                     if verificationCode.count == 6 {
+                        Task {
+                            await
                         verifyCodeAndContinue()
-                    }
+                    }}
                 }
         }
     }
@@ -345,15 +347,18 @@ struct TwoFactorSetupView: View {
                     .tint(theme.badgeBackground)
                 } else if currentStep == .verifyCode {
                     Button("Verify") {
-                        verifyCodeAndContinue()
-                    }
+                        Task {
+                            await verifyCodeAndContinue()
+                    }  }
                     .buttonStyle(.borderedProminent)
                     .tint(theme.badgeBackground)
                     .disabled(verificationCode.count != 6)
                 } else if currentStep == .backupCodes {
                     Button("Complete Setup") {
+                        Task {
+                            await
                         finalizeSetup()
-                    }
+                    } }
                     .buttonStyle(.borderedProminent)
                     .tint(theme.badgeBackground)
                 } else if currentStep == .complete {
@@ -403,10 +408,10 @@ struct TwoFactorSetupView: View {
         }
     }
     
-    private func verifyCodeAndContinue() {
+    private func verifyCodeAndContinue() async {
         let passwordData = Data(masterPassword.utf8)
         
-        guard TwoFactorAuthManager.shared.verify(code: verificationCode, masterPassword: passwordData) else {
+        guard await TwoFactorAuthManager.shared.verify(code: verificationCode, masterPassword: passwordData) else {
             errorMessage = "Invalid verification code. Please try again."
             showError = true
             verificationCode = ""
@@ -416,10 +421,10 @@ struct TwoFactorSetupView: View {
         currentStep = .backupCodes
     }
     
-    private func finalizeSetup() {
+    private func finalizeSetup() async {
         let passwordData = Data(masterPassword.utf8)
         
-        guard TwoFactorAuthManager.shared.enable(
+        guard await TwoFactorAuthManager.shared.enable(
             secret: secret,
             backupCodes: backupCodes,
             masterPassword: passwordData
@@ -532,7 +537,8 @@ struct TwoFactorVerificationView: View {
                         }
                     }
                 }
-                .onSubmit { verify() }
+                .onSubmit { Task {
+                    await verify() }}
             
             // Toggle backup code
             Button {
@@ -553,7 +559,10 @@ struct TwoFactorVerificationView: View {
                 .buttonStyle(.bordered)
                 
                 Button("Verify") {
-                    verify()
+                    Task {
+                        await
+                        verify()
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(theme.badgeBackground)
@@ -570,8 +579,8 @@ struct TwoFactorVerificationView: View {
         }
     }
     
-    private func verify() {
-        guard TwoFactorAuthManager.shared.verify(code: verificationCode, masterPassword: masterPassword) else {
+    private func verify() async {
+        guard await TwoFactorAuthManager.shared.verify(code: verificationCode, masterPassword: masterPassword) else {
             errorMessage = "Invalid code. Please try again."
             showError = true
             verificationCode = ""

@@ -270,9 +270,9 @@ struct TwoFactorSettingsView: View {
         case .disable:
             await disableTwoFactor(passwordData: passwordData)
         case .viewCodes:
-            viewBackupCodes(passwordData: passwordData)
+            await viewBackupCodes(passwordData: passwordData)
         case .regenerateCodes:
-            regenerateBackupCodes(passwordData: passwordData)
+            await regenerateBackupCodes(passwordData: passwordData)
         case .none:
             break
         }
@@ -291,8 +291,8 @@ struct TwoFactorSettingsView: View {
         isEnabled = false
     }
     
-    private func viewBackupCodes(passwordData: Data) {
-        guard let codes = TwoFactorAuthManager.shared.getRemainingBackupCodes(masterPassword: passwordData) else {
+    private func viewBackupCodes(passwordData: Data) async {
+        guard let codes = await TwoFactorAuthManager.shared.getRemainingBackupCodes(masterPassword: passwordData) else {
             errorMessage = "Failed to retrieve backup codes"
             showError = true
             return
@@ -302,8 +302,8 @@ struct TwoFactorSettingsView: View {
         showBackupCodesSheet = true
     }
     
-    private func regenerateBackupCodes(passwordData: Data) {
-        guard let codes = TwoFactorAuthManager.shared.regenerateBackupCodes(masterPassword: passwordData) else {
+    private func regenerateBackupCodes(passwordData: Data) async {
+        guard let codes = await TwoFactorAuthManager.shared.regenerateBackupCodes(masterPassword: passwordData) else {
             errorMessage = "Failed to regenerate backup codes"
             showError = true
             return
